@@ -1,0 +1,6 @@
+{
+  "name": "ChinaBall Pro - Futebol Multiplayer 2D",
+  "description": "ChinaBall Pro: Jogo de futebol 2D online estilo HaxBall com partidas ranqueadas reais e com bots, sistema de salas customizadas com árbitro, skins de times e seleções, e controles responsivos para mobile e PC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
