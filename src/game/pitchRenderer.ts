@@ -6,11 +6,20 @@ export class PitchRenderer {
   private ctx: CanvasRenderingContext2D;
   private camX = 0;
   private camY = 0;
+  private smoothShakeX = 0;
+  private smoothShakeY = 0;
+  private shakePhase = 0;
   private ballGradient: CanvasGradient | null = null;
   private lastBallRadius = 0;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+  }
+
+  public resetCameraShake() {
+    this.smoothShakeX = 0;
+    this.smoothShakeY = 0;
+    this.shakePhase = 0;
   }
 
   public render(
@@ -39,6 +48,9 @@ export class PitchRenderer {
     const allowLaser = hudConfig ? hudConfig.showAimLaser : true;
     const isFixedCam = hudConfig ? hudConfig.cameraFollow === 'fixed' : false;
 
+    const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
     ctx.clearRect(0, 0, width, height);
 
     // Fundo escuro limpo do estádio (#0a160e)
@@ -49,8 +61,6 @@ export class PitchRenderer {
     // CÂMERA DINÂMICA COM ZOOM INTELIGENTE PARA CELULAR (EM PÉ OU DEITADO) & PC
     // ========================================================================
     const isPortrait = height > width * 1.05;
-    const hasTouch = typeof window !== 'undefined' && ('ontouchstart' in window || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0));
-    const isMobileDevice = width < 960 || height < 540 || isPortrait || hasTouch;
 
     let baseScale: number;
     let cx = Math.round(width / 2);
@@ -58,22 +68,17 @@ export class PitchRenderer {
 
     if (isPortrait) {
       // CELULAR EM PÉ (PORTRAIT):
-      // Dá zoom no campo para a ação ficar grande, nítida e imersiva acima dos controles virtuais
-      cy = Math.round(height * 0.36);
-      baseScale = Math.max((width - 16) / (FW * 0.56), (height * 0.44) / FH);
-    } else if (isMobileDevice) {
-      // CELULAR DEITADO (LANDSCAPE):
-      // O campo preenche a tela com visual amplo, dinâmico e zoom focado na partida
-      cy = Math.round(height * 0.50);
-      baseScale = Math.min((width - 24) / FW, (height - 18) / FH) * 1.18;
+      // Foco dinâmico acima dos controles virtuais
+      cy = Math.round(height * 0.38);
+      baseScale = Math.min((width - 16) / (FW * 0.75), (height * 0.44) / FH);
     } else {
-      // PC / DESKTOP:
-      // Transmissão tática ampla mostrando o estádio completo
-      const marginX = 28;
-      const marginY = 22;
+      // CELULAR DEITADO (LANDSCAPE) & PC:
+      // FICA IGUAL NO PC: VISÃO PANORÂMICA COMPLETA DE TRAVE A TRAVE
+      const marginX = width < 700 ? 14 : 28;
+      const marginY = height < 420 ? 10 : 20;
       baseScale = Math.min(
-        (width - marginX * 2) / (FW + GD * 2 + 20),
-        (height - marginY * 2) / (FH + 20)
+        (width - marginX * 2) / (FW + GD * 2 + 16),
+        (height - marginY * 2) / (FH + 16)
       );
     }
 
@@ -83,46 +88,40 @@ export class PitchRenderer {
       baseScale *= 1.25;
     }
 
-    // Câmera de transmissão suave ou fixa
-    if (isFixedCam) {
+    // Câmera de transmissão: em landscape fixa completa como no PC
+    if (isFixedCam || !isPortrait) {
       this.camX = 0;
       this.camY = 0;
-    } else if (isPortrait) {
-      // No celular em pé, a câmera acompanha a ação entre o jogador e a bola dinamicamente
-      const targetCamX = engine.player.x * 0.45 + engine.ball.x * 0.55;
-      const targetCamY = engine.player.y * 0.45 + engine.ball.y * 0.55;
+    } else {
+      // No celular em pé, a câmera acompanha suavemente a ação
+      const targetCamX = engine.player.x * 0.40 + engine.ball.x * 0.60;
+      const targetCamY = engine.player.y * 0.40 + engine.ball.y * 0.60;
       const maxCamX = Math.max(0, hw + GD - width / (2 * baseScale));
       const maxCamY = Math.max(0, hh - (height * 0.42) / (2 * baseScale));
       const clampedX = Math.max(-maxCamX, Math.min(maxCamX, targetCamX));
       const clampedY = Math.max(-maxCamY, Math.min(maxCamY, targetCamY));
       this.camX += (clampedX - this.camX) * 0.12;
       this.camY += (clampedY - this.camY) * 0.12;
-    } else if (isMobileDevice) {
-      // No celular deitado, foco dinâmico suave
-      const targetCamX = engine.player.x * 0.35 + engine.ball.x * 0.65;
-      const targetCamY = engine.player.y * 0.35 + engine.ball.y * 0.65;
-      const maxCamX = Math.max(0, hw + GD - width / (2 * baseScale));
-      const maxCamY = Math.max(0, hh - height / (2 * baseScale));
-      const clampedX = Math.max(-maxCamX, Math.min(maxCamX, targetCamX));
-      const clampedY = Math.max(-maxCamY, Math.min(maxCamY, targetCamY));
-      this.camX += (clampedX - this.camX) * 0.10;
-      this.camY += (clampedY - this.camY) * 0.10;
-    } else {
-      // PC: panning suave de transmissão televisiva
-      const targetCamX = engine.ball.x * 0.10 + engine.player.x * 0.04;
-      const targetCamY = engine.ball.y * 0.10 + engine.player.y * 0.04;
-      this.camX += (targetCamX - this.camX) * 0.06;
-      this.camY += (targetCamY - this.camY) * 0.06;
     }
 
     ctx.save();
 
-    // Aplicação do Screen Shake
+    // Aplicação do Screen Shake ultra suave com interpolação contínua (anti-jitter)
     let shakeX = 0;
     let shakeY = 0;
-    if (allowShake && engine.screenShake > 0.05) {
-      shakeX = (Math.random() - 0.5) * 2 * engine.screenShake;
-      shakeY = (Math.random() - 0.5) * 2 * engine.screenShake;
+    if (allowShake && engine.screenShake > 0.04) {
+      const shakeMag = Math.min(engine.screenShake, 1.8);
+      this.shakePhase += 0.42;
+      const targetShakeX = Math.sin(this.shakePhase * 6.3) * shakeMag;
+      const targetShakeY = Math.cos(this.shakePhase * 4.7) * shakeMag;
+      this.smoothShakeX += (targetShakeX - this.smoothShakeX) * 0.4;
+      this.smoothShakeY += (targetShakeY - this.smoothShakeY) * 0.4;
+      shakeX = this.smoothShakeX;
+      shakeY = this.smoothShakeY;
+    } else {
+      this.smoothShakeX = 0;
+      this.smoothShakeY = 0;
+      this.shakePhase = 0;
     }
 
     ctx.translate(cx + shakeX - this.camX * baseScale, cy + shakeY - this.camY * baseScale);

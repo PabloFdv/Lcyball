@@ -64,6 +64,8 @@ app.post('/api/rooms', (req, res) => {
     createdAt: Date.now(),
     isMatchStarted: false,
     currentKickoffTeam: 'red',
+    kickoffActive: true,
+    kickoffTouchConfirmed: false,
     players: new Map(),
   };
 

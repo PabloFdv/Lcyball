@@ -58,6 +58,7 @@ interface HudSettingsModalProps {
   onClose: () => void;
   config: HudConfig;
   onChange: (newConfig: HudConfig) => void;
+  onStartCustomizingHud?: () => void;
 }
 
 export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
@@ -65,6 +66,7 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
   onClose,
   config,
   onChange,
+  onStartCustomizingHud,
 }) => {
   if (!isOpen) return null;
 
@@ -320,6 +322,26 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
           </div>
         </div>
 
+        {/* Botão de Customização Livre no Campo */}
+        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/40 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-bold text-amber-300">Posicionar HUD na Tela (Arrastar Livre)</div>
+            <div className="text-[11px] text-zinc-400">
+              Arraste o analógico e o chute com o dedo para qualquer lugar da tela
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              onStartCustomizingHud?.();
+            }}
+            className="px-3.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md active:scale-95 whitespace-nowrap"
+          >
+            Mover na Tela ↗
+          </button>
+        </div>
+
         {/* Sliders de Tamanho dos Controles */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-white/10">
           <div className="flex flex-col gap-1">
@@ -329,8 +351,8 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
             </div>
             <input
               type="range"
-              min="90"
-              max="170"
+              min="60"
+              max="240"
               step="4"
               value={config.joystickSize}
               onChange={(e) =>
@@ -347,8 +369,8 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
             </div>
             <input
               type="range"
-              min="64"
-              max="120"
+              min="50"
+              max="200"
               step="4"
               value={config.kickSize}
               onChange={(e) =>
@@ -368,8 +390,8 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
             </div>
             <input
               type="range"
-              min="10"
-              max="90"
+              min="0"
+              max="450"
               step="2"
               value={config.joystickOffsetX}
               onChange={(e) =>
@@ -386,8 +408,8 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
             </div>
             <input
               type="range"
-              min="10"
-              max="90"
+              min="0"
+              max="450"
               step="2"
               value={config.joystickOffsetY}
               onChange={(e) =>
@@ -404,8 +426,8 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
             </div>
             <input
               type="range"
-              min="10"
-              max="90"
+              min="0"
+              max="450"
               step="2"
               value={config.kickOffsetX}
               onChange={(e) =>
@@ -422,8 +444,8 @@ export const HudSettingsModal: React.FC<HudSettingsModalProps> = ({
             </div>
             <input
               type="range"
-              min="10"
-              max="90"
+              min="0"
+              max="450"
               step="2"
               value={config.kickOffsetY}
               onChange={(e) =>

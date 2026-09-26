@@ -19,6 +19,7 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({ onLoaded }) => {
   const [progress, setProgress] = useState(0);
   const [stepText, setStepText] = useState('Iniciando motor de jogo...');
   const [tipIndex, setTipIndex] = useState(0);
+  const [isFadingOut, setIsFadingOut] = useState(false);
   const hasFinishedRef = useRef(false);
   const onLoadedRef = useRef(onLoaded);
   onLoadedRef.current = onLoaded;
@@ -28,12 +29,14 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({ onLoaded }) => {
     hasFinishedRef.current = true;
     setProgress(100);
     setStepText('Tudo pronto para entrar em campo!');
+    setIsFadingOut(true);
     try {
       sounds.playWhistle();
     } catch {}
     setTimeout(() => {
       onLoadedRef.current();
-    }, 150);
+      window.dispatchEvent(new Event('resize'));
+    }, 280);
   };
 
   useEffect(() => {
@@ -75,7 +78,11 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({ onLoaded }) => {
   }, []);
 
   return (
-    <div className="fixed inset-0 z-[100] flex flex-col items-center justify-between p-6 bg-[#070b0e] text-white select-none overflow-hidden">
+    <div
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-between p-6 bg-[#070b0e] text-white select-none overflow-hidden transition-opacity duration-300 ${
+        isFadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100'
+      }`}
+    >
       {/* Luz ambiente de estádio no fundo */}
       <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_50%_40%,rgba(16,185,129,0.14),transparent_65%)]" />
       <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />

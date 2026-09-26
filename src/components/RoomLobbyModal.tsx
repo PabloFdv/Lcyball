@@ -120,11 +120,6 @@ export const RoomLobbyModal: React.FC<RoomLobbyModalProps> = ({
   };
 
   const handleAttemptStart = () => {
-    if (!canStart) {
-      setNotice('A partida só pode começar com pelo menos 1 jogador real em cada time! Sem bots.');
-      setTimeout(() => setNotice(null), 3500);
-      return;
-    }
     sounds.playGoal();
     onStartMatch();
   };

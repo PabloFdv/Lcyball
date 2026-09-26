@@ -79,7 +79,8 @@ interface GameMenuModalProps {
     teamSize: 1 | 2 | 3 | 4,
     goalLimit: number,
     timeLimit: number,
-    ownerTeam: 'red' | 'blue' | 'spec'
+    ownerTeam: 'red' | 'blue' | 'spec',
+    roomId?: string
   ) => void;
   onToggleOrientation: () => void;
   isLandscapeForced: boolean;
@@ -133,7 +134,6 @@ export const GameMenuModal: React.FC<GameMenuModalProps> = ({
   const [onlineRooms, setOnlineRooms] = useState<RoomInfo[]>([]);
   const [isLoadingRooms, setIsLoadingRooms] = useState(false);
   const [roomFilter, setRoomFilter] = useState<'all' | '1v1' | '2v2' | '3v3' | '4v4'>('all');
-  const [copiedLink, setCopiedLink] = useState(false);
   const [copiedRoomId, setCopiedRoomId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
@@ -181,14 +181,6 @@ export const GameMenuModal: React.FC<GameMenuModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleCopyMobileLink = () => {
-    const soloUrl = `${window.location.origin}/download/ChinaBall_Solo_Mobile.html`;
-    navigator.clipboard.writeText(soloUrl).then(() => {
-      setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 2000);
-    }).catch(() => {});
-  };
-
   const handleCopyRoomInvite = (roomId: string) => {
     const inviteUrl = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
     navigator.clipboard.writeText(inviteUrl).then(() => {
@@ -220,13 +212,10 @@ export const GameMenuModal: React.FC<GameMenuModalProps> = ({
           data.room.teamSize,
           data.room.goalLimit,
           data.room.timeLimit,
-          newOwnerTeam
+          newOwnerTeam,
+          data.room.id
         );
-        setNotification(`Sala "${data.room.name}" aberta! Você é o dono e árbitro.`);
-        setTimeout(() => {
-          setNotification(null);
-          onClose();
-        }, 1200);
+        onClose();
         return;
       }
     } catch {}
@@ -336,19 +325,6 @@ export const GameMenuModal: React.FC<GameMenuModalProps> = ({
           >
             <Award className="w-4 h-4 text-amber-400" />
             <span>Ranking & Estatísticas</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('mobile')}
-            className={`flex items-center gap-2 px-3.5 py-2.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
-              activeTab === 'mobile'
-                ? 'border-amber-400 text-amber-300 bg-zinc-800/40'
-                : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/20'
-            }`}
-          >
-            <Smartphone className="w-4 h-4" />
-            <span>Versão Mobile (Solo)</span>
           </button>
 
           <button
@@ -901,61 +877,6 @@ export const GameMenuModal: React.FC<GameMenuModalProps> = ({
                     ))}
                   </div>
                 )}
-              </div>
-            </div>
-          )}
-
-          {/* ABA 4: VERSÃO MOBILE SOLO (OFFLINE) */}
-          {activeTab === 'mobile' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-xl bg-[#12171f] border border-zinc-800 space-y-3">
-                <div className="flex items-center gap-2.5">
-                  <Smartphone className="w-5 h-5 text-amber-400" />
-                  <div>
-                    <h3 className="text-sm font-bold text-white">ChinaBall Solo Mobile (HTML Offline)</h3>
-                    <p className="text-xs text-zinc-400">
-                      Jogue no celular sem precisar de internet ou servidor. Arquivo único e autocontido com analógico touch e áudio sintetizado.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-3 rounded-lg bg-zinc-900/80 border border-zinc-800 text-xs space-y-1 text-zinc-300">
-                  <div className="font-semibold text-white">Como testar no seu celular:</div>
-                  <ol className="list-decimal list-inside space-y-1 text-zinc-400 text-[11px]">
-                    <li>Baixe o arquivo clicando no botão abaixo ou acesse o link direto no celular.</li>
-                    <li>Abra no Chrome ou Safari. Não precisa de internet após abrir!</li>
-                    <li>Toque em "Adicionar à Tela Inicial" para jogar em tela cheia como se fosse um app nativo.</li>
-                  </ol>
-                </div>
-
-                <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
-                  <a
-                    href="/download/ChinaBall_Solo_Mobile.html"
-                    download="ChinaBall_Solo_Mobile.html"
-                    className="w-full sm:w-auto px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Baixar ChinaBall_Solo_Mobile.html (35KB)</span>
-                  </a>
-
-                  <button
-                    type="button"
-                    onClick={handleCopyMobileLink}
-                    className="w-full sm:w-auto px-3 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-zinc-700"
-                  >
-                    {copiedLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedLink ? 'Link Copiado!' : 'Copiar Link para Celular'}</span>
-                  </button>
-
-                  <a
-                    href="/public/futzin_1v1_mobile.html"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="w-full sm:w-auto px-3 py-2.5 rounded-lg bg-zinc-800/60 hover:bg-zinc-700 text-zinc-300 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-zinc-700/60"
-                  >
-                    <span>Abrir Solo no Navegador ↗</span>
-                  </a>
-                </div>
               </div>
             </div>
           )}

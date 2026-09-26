@@ -37,6 +37,8 @@ export interface Room {
   createdAt: number;
   isMatchStarted: boolean;
   currentKickoffTeam: 'red' | 'blue';
+  kickoffActive?: boolean;
+  kickoffTouchConfirmed?: boolean;
   players: Map<string, RoomPlayer>;
 }
 
@@ -501,19 +503,10 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
               const redCount = Array.from(room.players.values()).filter((p) => p.team === 'red').length;
               const blueCount = Array.from(room.players.values()).filter((p) => p.team === 'blue').length;
 
-              if (redCount === 0 || blueCount === 0) {
-                ws.send(
-                  JSON.stringify({
-                    type: 'room_notice',
-                    message:
-                      'Para iniciar a partida online é necessário pelo menos 1 jogador real em cada time! Sem bots.',
-                  })
-                );
-                return;
-              }
-
               room.isMatchStarted = true;
               room.currentKickoffTeam = 'red'; // Sempre começa com o Time Vermelho!
+              room.kickoffActive = true;
+              room.kickoffTouchConfirmed = false;
 
               broadcastToRoom(room, {
                 type: 'match_started_by_referee',
@@ -643,18 +636,73 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
           const room = rooms.get(currentRoomId);
           if (room) {
             const sender = room.players.get(playerId);
+            const team = sender?.team || 'red';
+
+            let validX = typeof msg.x === 'number' ? msg.x : 0;
+            let validY = typeof msg.y === 'number' ? msg.y : 0;
+            let validVx = typeof msg.vx === 'number' ? msg.vx : 0;
+            let validVy = typeof msg.vy === 'number' ? msg.vy : 0;
+            let validIsKicking = Boolean(msg.isKicking);
+
+            // REGRA CANÔNICA DETERMINÍSTICA DO PONTAPÉ INICIAL (SERVER-SIDE LOCKDOWN)
+            if (room.isMatchStarted && room.kickoffActive && !room.kickoffTouchConfirmed) {
+              const kickoffTeam = room.currentKickoffTeam || 'red';
+              const playerRadius = 15;
+              const centerCircleR = 140;
+
+              if (team !== kickoffTeam) {
+                // Time adversário não pode chutar nem tocar na bola antes da equipe do kickoff
+                validIsKicking = false;
+
+                // Não pode invadir o campo adversário antes do toque
+                if (kickoffTeam === 'red') {
+                  if (validX < playerRadius) {
+                    validX = playerRadius;
+                    validVx = Math.max(0, validVx);
+                  }
+                } else {
+                  if (validX > -playerRadius) {
+                    validX = -playerRadius;
+                    validVx = Math.min(0, validVx);
+                  }
+                }
+
+                // Não pode entrar no círculo central
+                const distToCenter = Math.hypot(validX, validY);
+                const minCenterDist = centerCircleR + playerRadius;
+                if (distToCenter < minCenterDist && distToCenter > 1e-4) {
+                  const nx = validX / distToCenter;
+                  const ny = validY / distToCenter;
+                  validX = nx * minCenterDist;
+                  validY = ny * minCenterDist;
+                  validVx = Math.max(0, validVx * nx) * nx;
+                  validVy = Math.max(0, validVy * ny) * ny;
+                }
+              } else {
+                // Apenas a equipe do kickoff pode chutar e dar a saída de bola
+                if (validIsKicking) {
+                  room.kickoffActive = false;
+                  room.kickoffTouchConfirmed = true;
+                  broadcastToRoom(room, {
+                    type: 'kickoff_cleared',
+                    kickingTeam: kickoffTeam,
+                  });
+                }
+              }
+            }
+
             broadcastToRoom(
               room,
               {
                 type: 'peer_player_sync',
                 playerId,
-                team: sender?.team || 'red',
+                team,
                 slot: sender?.slot || 0,
-                x: msg.x,
-                y: msg.y,
-                vx: msg.vx,
-                vy: msg.vy,
-                isKicking: Boolean(msg.isKicking),
+                x: validX,
+                y: validY,
+                vx: validVx,
+                vy: validVy,
+                isKicking: validIsKicking,
               },
               playerId
             );
@@ -667,6 +715,15 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
           if (room) {
             const sender = room.players.get(playerId);
             if (sender?.isHost) {
+              // Se a bola saiu do centro, confirma liberação do kickoff
+              if (
+                room.kickoffActive &&
+                (Math.abs(msg.x) > 3.0 || Math.abs(msg.y) > 3.0 || Math.hypot(msg.vx, msg.vy) > 0.4)
+              ) {
+                room.kickoffActive = false;
+                room.kickoffTouchConfirmed = true;
+              }
+
               broadcastToRoom(
                 room,
                 {
@@ -694,6 +751,8 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
             const scorerTeam: 'red' | 'blue' = msg.scorerTeam;
             const nextPossession: 'red' | 'blue' = scorerTeam === 'red' ? 'blue' : 'red';
             room.currentKickoffTeam = nextPossession;
+            room.kickoffActive = true;
+            room.kickoffTouchConfirmed = false;
 
             broadcastToRoom(room, {
               type: 'peer_goal',

@@ -832,6 +832,14 @@ export class ChinaBallEngine {
    * DISPARO E CHUTE POTENTE (HAXBALL AUTHENTIC KICK COM JUICE VISUAL)
    */
   public executeKick(kicker: PlayerDisc, analogX: number, analogY: number, powerMultiplier = 1.0): boolean {
+    // Regra do Pontapé Inicial: somente o time com a posse pode tocar/chutar a bola
+    if (this.kickoffActive) {
+      if (kicker.team !== this.currentKickoffTeam) {
+        return false;
+      }
+      this.kickoffActive = false;
+    }
+
     const dx = this.ball.x - kicker.x;
     const dy = this.ball.y - kicker.y;
     const dist = Math.hypot(dx, dy);
@@ -867,6 +875,10 @@ export class ChinaBallEngine {
       }
     }
 
+    // Separação suave da bola para evitar travamento ou colisão rígida
+    this.ball.x = kicker.x + kickDirX * (kicker.radius + this.ball.radius + 1.2);
+    this.ball.y = kicker.y + kickDirY * (kicker.radius + this.ball.radius + 1.2);
+
     // Cálculo da potência
     const kickerSpeed = Math.hypot(kicker.vx, kicker.vy);
     const forwardKinetic = Math.max(0, kicker.vx * kickDirX + kicker.vy * kickDirY);
@@ -880,8 +892,8 @@ export class ChinaBallEngine {
     const ty = kickDirX;
     const sliceVt = (kicker.vx - this.ball.vx) * tx + (kicker.vy - this.ball.vy) * ty;
 
-    this.ball.vx = kickDirX * finalPower + tx * (sliceVt * 0.16);
-    this.ball.vy = kickDirY * finalPower + ty * (sliceVt * 0.16);
+    this.ball.vx = kickDirX * finalPower + tx * (sliceVt * 0.14);
+    this.ball.vy = kickDirY * finalPower + ty * (sliceVt * 0.14);
 
     const bSpeed = Math.hypot(this.ball.vx, this.ball.vy);
     if (bSpeed > HAXBALL.ball.maxSpeed) {
@@ -889,7 +901,7 @@ export class ChinaBallEngine {
       this.ball.vy = (this.ball.vy / bSpeed) * HAXBALL.ball.maxSpeed;
     }
 
-    this.ballAngularVelocity = sliceVt * 2.2;
+    this.ballAngularVelocity = sliceVt * 1.8;
 
     // Efeitos visuais táteis (Shockwave anelar e faíscas de grama)
     if (this.enableEffects) {
@@ -925,7 +937,7 @@ export class ChinaBallEngine {
     }
 
     if (kicker === this.player) {
-      this.screenShake = Math.max(this.screenShake, Math.min(4.5, finalPower * 0.65));
+      this.screenShake = Math.max(this.screenShake, Math.min(1.2, finalPower * 0.10));
       this.kickCooldown = HAXBALL.kick.cooldownTicks;
     }
 
@@ -993,6 +1005,19 @@ export class ChinaBallEngine {
 
     const nx = dx / dist;
     const ny = dy / dist;
+
+    // Regra do Pontapé Inicial HaxBall: time adversário não pode tocar na bola
+    if (this.kickoffActive) {
+      if (player.team !== this.currentKickoffTeam) {
+        const pen = minDist - dist;
+        player.x -= nx * pen;
+        player.y -= ny * pen;
+        player.vx = -nx * 1.5;
+        player.vy = -ny * 1.5;
+        return false;
+      }
+      this.kickoffActive = false;
+    }
 
     // Resolução posicional baseada na proporção exata de massas (2/3 bola, 1/3 jogador)
     const pen = minDist - dist;
@@ -1280,6 +1305,38 @@ export class ChinaBallEngine {
         p.y += p.vy * subDt;
       }
 
+      // Barreira Canônica de Pontapé Inicial HaxBall (Impede time adversário de invadir ou tocar na bola)
+      if (this.kickoffActive) {
+        const circleR = this.field.centerCircleR || 140;
+        for (const p of this.players) {
+          if (p.team !== this.currentKickoffTeam) {
+            // Adversário não entra no círculo central
+            const distCenter = Math.hypot(p.x, p.y);
+            const minCenter = circleR + p.radius;
+            if (distCenter < minCenter && distCenter > 1e-4) {
+              const nx = p.x / distCenter;
+              const ny = p.y / distCenter;
+              p.x = nx * minCenter;
+              p.y = ny * minCenter;
+              p.vx = Math.max(0, p.vx * nx) * nx;
+              p.vy = Math.max(0, p.vy * ny) * ny;
+            }
+            // Adversário não invade a metade do campo antes do pontapé inicial
+            if (this.currentKickoffTeam === 'red') {
+              if (p.team === 'blue' && p.x < p.radius) {
+                p.x = p.radius;
+                p.vx = Math.max(0, p.vx);
+              }
+            } else {
+              if (p.team === 'red' && p.x > -p.radius) {
+                p.x = -p.radius;
+                p.vx = Math.min(0, p.vx);
+              }
+            }
+          }
+        }
+      }
+
       // Avanço da bola
       this.ball.x += this.ball.vx * subDt;
       this.ball.y += this.ball.vy * subDt;
@@ -1398,10 +1455,10 @@ export class ChinaBallEngine {
       this.ballTrail[i].alpha *= 0.82;
     }
 
-    // Decaimento do screen shake
+    // Decaimento do screen shake suave e rápido
     if (this.screenShake > 0) {
-      this.screenShake *= Math.pow(0.85, dtRatio);
-      if (this.screenShake < 0.1) this.screenShake = 0;
+      this.screenShake *= Math.pow(0.70, dtRatio);
+      if (this.screenShake < 0.05) this.screenShake = 0;
     }
   }
 
@@ -1466,7 +1523,7 @@ export class ChinaBallEngine {
     if (this.enableSlowMo) {
       this.slowMoTicks = 24;
     }
-    this.screenShake = 8.5;
+    this.screenShake = 2.0;
     sounds.playGoal();
 
     if (this.enableEffects) {

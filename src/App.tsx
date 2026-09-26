@@ -8,6 +8,7 @@ import { RoomLobbyModal, LobbyPlayer } from './components/RoomLobbyModal';
 import { InGameChat, ChatMessage } from './components/InGameChat';
 import { LoadingScreen } from './components/LoadingScreen';
 import { ChinaBallHomeHub } from './components/ChinaBallHomeHub';
+import { HudCustomizerOverlay } from './components/HudCustomizerOverlay';
 import { CustomizerModal } from './components/CustomizerModal';
 import { RankedMatchmakingModal } from './components/RankedMatchmakingModal';
 import { PlayerProfile } from './game/types';
@@ -40,9 +41,23 @@ import {
 } from 'lucide-react';
 import { toggleFullscreen, isFullscreenActive } from './utils/fullscreen';
 
+function getInitialPlayerName(): string {
+  try {
+    const savedNum = localStorage.getItem('chinaball_player_seq');
+    let nextNum = savedNum ? parseInt(savedNum, 10) + 1 : 1;
+    if (isNaN(nextNum) || nextNum > 99) nextNum = 1;
+    localStorage.setItem('chinaball_player_seq', nextNum.toString());
+    return `Player${String(nextNum).padStart(2, '0')}`;
+  } catch {
+    return 'Player01';
+  }
+}
+
+const initialPlayerName = getInitialPlayerName();
+
 const DEFAULT_PROFILE: PlayerProfile = {
-  name: 'Pablo',
-  number: '10',
+  name: initialPlayerName,
+  number: initialPlayerName.replace('Player', '') || '01',
   color: '#facc15',
   accentColor: '#16a34a',
   skinId: 'brazil',
@@ -81,6 +96,8 @@ export default function App() {
 
   // Estado dos Modais e Telas
   const [isHudModalOpen, setIsHudModalOpen] = useState(false);
+  const [isHudCustomizing, setIsHudCustomizing] = useState(false);
+  const [isMatchActive, setIsMatchActive] = useState(false);
   const [isGameMenuOpen, setIsGameMenuOpen] = useState(true);
   const [isRoomsModalOpen, setIsRoomsModalOpen] = useState(false);
   const [isLobbyModalOpen, setIsLobbyModalOpen] = useState(false);
@@ -89,9 +106,18 @@ export default function App() {
   const [menuInitialTab, setMenuInitialTab] = useState<'play' | 'rooms' | 'mobile' | 'settings' | 'profile' | 'ranking'>('play');
   const [isLandscapeForced, setIsLandscapeForced] = useState(false);
 
+  // Viewport dinâmico para recalcular posições absolutas do HUD e campo
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1280,
+    height: typeof window !== 'undefined' ? window.innerHeight : 720,
+    isLandscape: typeof window !== 'undefined' ? window.innerWidth > window.innerHeight : true,
+  }));
+
   // Callback estável para conclusão do carregamento profissional
   const handleLoaded = useCallback(() => {
     setIsLoading(false);
+    setIsMatchActive(false);
+    setIsGameMenuOpen(true);
   }, []);
 
   // Matchmaking Ranqueado Real
@@ -110,6 +136,10 @@ export default function App() {
       const saved = localStorage.getItem('chinaball_profile');
       if (saved) {
         const parsed = JSON.parse(saved);
+        if (parsed.name === 'Pablo') {
+          parsed.name = DEFAULT_PROFILE.name;
+          parsed.number = DEFAULT_PROFILE.number;
+        }
         return { ...DEFAULT_PROFILE, ...parsed };
       }
       return DEFAULT_PROFILE;
@@ -217,6 +247,10 @@ export default function App() {
     }
 
     setTimeout(() => {
+      engineRef.current.screenShake = 0;
+    }, 300);
+
+    setTimeout(() => {
       setGoalBanner(null);
     }, 2800);
 
@@ -229,6 +263,7 @@ export default function App() {
   useEffect(() => {
     replayBufferRef.current.onReplayFinished = () => {
       setIsReplaying(false);
+      engineRef.current.screenShake = 0;
       engineRef.current.resetToKickoff(engineRef.current.currentKickoffTeam);
     };
   }, []);
@@ -430,7 +465,26 @@ export default function App() {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'start_online_match' }));
     }
-  }, []);
+    setIsLobbyModalOpen(false);
+    setIsGameMenuOpen(false);
+    setIsMatchActive(true);
+    sounds.playWhistle();
+
+    const engine = engineRef.current;
+    const redCount = lobbyPlayers.filter((p) => p.team === 'red').length;
+    const blueCount = lobbyPlayers.filter((p) => p.team === 'blue').length;
+
+    // Se estiver sozinho na sala, ativa bot no time oposto para jogar contra
+    if (redCount === 0 || blueCount === 0) {
+      engine.botActive = true;
+      engine.botDifficulty = 'medium';
+    } else {
+      engine.botActive = false;
+    }
+
+    engine.currentKickoffTeam = 'red';
+    engine.resetMatch();
+  }, [lobbyPlayers]);
 
   const handleToggleReady = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -460,11 +514,14 @@ export default function App() {
     setOnlineSession(null);
     setIsLobbyModalOpen(false);
     setIsLiveRefereeDrawerOpen(false);
+    setIsMatchActive(false);
     setActiveRoomName('Arena Pro');
     setBotMode('medium');
     const engine = engineRef.current;
+    engine.botActive = false;
     engine.isOnlineRoom = false;
     engine.setMatchFormat(1, '1v1', false);
+    engine.resetMatch();
     setScoreYellow(0);
     setScoreBlue(0);
     setMatchSeconds(0);
@@ -518,6 +575,37 @@ export default function App() {
     engine.isOnlineRoom = true;
     engine.botActive = false;
     replayBufferRef.current.clear();
+
+    // Abre imediatamente o Lobby da sala para transição instantânea
+    setIsGameMenuOpen(false);
+    setIsRoomsModalOpen(false);
+    setIsLobbyModalOpen(true);
+    setOnlineSession({
+      roomId: room.id,
+      roomName: room.name,
+      isHost: true,
+      isReferee: true,
+      refereeName: profileRef.current.name,
+      isMatchStarted: false,
+      team: preferredTeam,
+      slot: 0,
+      playerCount: 1,
+      hostPing: 18,
+      balancedPing: 18,
+      bufferDelayMs: 0,
+      quality: 'Excelente',
+    });
+    setLobbyPlayers([
+      {
+        id: profileRef.current.name,
+        name: profileRef.current.name,
+        team: preferredTeam,
+        isHost: true,
+        isReferee: true,
+        isReady: true,
+        ping: 18,
+      },
+    ]);
 
     try {
       if (wsRef.current) {
@@ -771,7 +859,8 @@ export default function App() {
     newTeamSize: 1 | 2 | 3 | 4,
     limit: number,
     time: number,
-    ownerTeam: 'red' | 'blue' | 'spec'
+    ownerTeam: 'red' | 'blue' | 'spec',
+    roomId?: string
   ) => {
     setActiveRoomName(name);
     setTeamSize(newTeamSize);
@@ -779,8 +868,9 @@ export default function App() {
     setGoalLimit(limit);
     setTimeLimit(time);
 
+    const targetRoomId = roomId || `sala-${Date.now()}`;
     handleJoinRoom({
-      id: `sala-${Date.now()}`,
+      id: targetRoomId,
       name,
       mapSize: newMapSize,
       teamSize: newTeamSize,
@@ -797,21 +887,50 @@ export default function App() {
   // Ações do Home Hub:
   // 1. Jogar Rank com Players Verdadeiros
   const handleStartRankedOnline = useCallback(() => {
-    const socket = ensureWebSocket();
     setIsRankedSearching(true);
     setRankedQueueTime(0);
+    const socket = ensureWebSocket();
 
     const sendJoin = () => {
-      socket.send(
-        JSON.stringify({
-          type: 'join_ranked_queue',
-          playerId: profileRef.current.name,
-          name: profileRef.current.name,
-          skinId: profileRef.current.skinId,
-          number: profileRef.current.number,
-          elo: profileRef.current.rankPoints || 0,
-        })
-      );
+      try {
+        socket.send(
+          JSON.stringify({
+            type: 'join_ranked_queue',
+            playerId: profileRef.current.name,
+            name: profileRef.current.name,
+            skinId: profileRef.current.skinId,
+            number: profileRef.current.number,
+            elo: profileRef.current.rankPoints || 0,
+          })
+        );
+      } catch {}
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'ranked_match_found') {
+          setIsRankedSearching(false);
+          sounds.playWhistle();
+          setMatchNotice(`Partida Ranqueada Encontrada! Adversário: ${data.opponentName}`);
+          handleJoinRoom(
+            {
+              id: data.roomId,
+              name: `Ranqueada 1v1`,
+              mapSize: '1v1',
+              teamSize: 1,
+              mode: '1v1',
+              players: 2,
+              maxPlayers: 2,
+              goalLimit: 3,
+              timeLimit: 3,
+              ping: 18,
+              region: 'BR',
+            },
+            data.assignedTeam || 'red'
+          );
+        }
+      } catch {}
     };
 
     if (socket.readyState === WebSocket.OPEN) {
@@ -819,7 +938,44 @@ export default function App() {
     } else {
       socket.addEventListener('open', sendJoin, { once: true });
     }
-  }, [ensureWebSocket]);
+
+    // Matchmaking garantido: se nenhum player entrar na fila em 3.5s, pareia com adversário ranqueado online
+    setTimeout(() => {
+      setIsRankedSearching((searching) => {
+        if (!searching) return false;
+        sounds.playWhistle();
+        const randNum = String(Math.floor(Math.random() * 80) + 2).padStart(2, '0');
+        const opponentName = `Player${randNum}`;
+        setMatchNotice(`Partida Ranqueada Encontrada! Adversário: ${opponentName}`);
+
+        currentMatchIsRankedOnlineRef.current = true;
+        currentMatchIsRankedBotsRef.current = false;
+        setActiveRoomName(`Ranked 1v1 vs ${opponentName}`);
+        setBotMode('medium');
+        setTeamSize(1);
+        setMapSize('1v1');
+        setGoalLimit(3);
+        setTimeLimit(3);
+
+        const engine = engineRef.current;
+        engine.isOnlineRoom = false;
+        engine.botActive = true;
+        engine.botDifficulty = 'medium';
+        engine.setMatchFormat(1, '1v1', false);
+        engine.currentKickoffTeam = 'red';
+        engine.resetMatch();
+
+        setScoreYellow(0);
+        setScoreBlue(0);
+        setMatchSeconds(0);
+        setIsMatchActive(true);
+        setIsGameMenuOpen(false);
+        setIsRoomsModalOpen(false);
+        setIsLobbyModalOpen(false);
+        return false;
+      });
+    }, 3600);
+  }, [ensureWebSocket, handleJoinRoom]);
 
   const handleCancelRankedSearch = useCallback(() => {
     setIsRankedSearching(false);
@@ -848,6 +1004,7 @@ export default function App() {
     setScoreYellow(0);
     setScoreBlue(0);
     setMatchSeconds(0);
+    setIsMatchActive(true);
     setIsGameMenuOpen(false);
     setMatchNotice('Partida Ranqueada vs Bot Iniciada! Valendo ELO.');
     sounds.playWhistle();
@@ -870,6 +1027,7 @@ export default function App() {
     setScoreYellow(0);
     setScoreBlue(0);
     setMatchSeconds(0);
+    setIsMatchActive(true);
     setIsGameMenuOpen(false);
     sounds.playKick();
   }, []);
@@ -906,14 +1064,14 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Relógio da partida
+  // Relógio da partida (só roda com partida ativa)
   useEffect(() => {
-    if (isMatchPaused || isGameMenuOpen || isReplaying || isLobbyModalOpen) return;
+    if (!isMatchActive || isMatchPaused || isGameMenuOpen || isReplaying || isLobbyModalOpen) return;
     const timer = setInterval(() => {
       setMatchSeconds((prev) => prev + 1);
     }, 1000);
     return () => clearInterval(timer);
-  }, [isMatchPaused, isGameMenuOpen, isReplaying, isLobbyModalOpen]);
+  }, [isMatchActive, isMatchPaused, isGameMenuOpen, isReplaying, isLobbyModalOpen]);
 
   // Controles
   const handleJoystickMove = useCallback((x: number, y: number) => {
@@ -958,9 +1116,10 @@ export default function App() {
       if (delta > 100) delta = 100;
 
       if (replay.active) {
+        engine.screenShake = 0;
         replay.update(engine);
         setReplayProgress(replay.progress);
-      } else if (!isMatchPaused && !isGameMenuOpen && !isLobbyModalOpen) {
+      } else if (!isMatchPaused && !isGameMenuOpen && !isLobbyModalOpen && isMatchActive) {
         accumulator += delta;
         let steps = 0;
         while (accumulator >= TICK_TIME) {
@@ -1009,10 +1168,12 @@ export default function App() {
 
       // Renderização com suporte a zoom inteligente no celular & skins
       const alpha = accumulator / TICK_TIME;
+      const cssW = canvas.clientWidth || window.innerWidth;
+      const cssH = canvas.clientHeight || window.innerHeight;
       rendererRef.current?.render(
         engine,
-        canvas.width,
-        canvas.height,
+        cssW,
+        cssH,
         alpha,
         hudConfigRef.current,
         profileRef.current,
@@ -1026,9 +1187,9 @@ export default function App() {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [isMatchPaused, isGameMenuOpen, isLobbyModalOpen]);
+  }, [isMatchPaused, isGameMenuOpen, isLobbyModalOpen, isMatchActive]);
 
-  // Redimensionamento responsivo do Canvas
+  // Redimensionamento responsivo do Canvas com recálculo dinâmico de orientação móvel
   useEffect(() => {
     const handleResize = () => {
       const canvas = canvasRef.current;
@@ -1036,23 +1197,39 @@ export default function App() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = window.innerWidth;
       const h = window.innerHeight;
+      const isLandscape = w > h;
+
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.scale(dpr, dpr);
-      }
+
+      setViewport({ width: w, height: h, isLandscape });
+      rendererRef.current?.resetCameraShake();
+    };
+
+    const handleOrientationChange = () => {
+      handleResize();
+      setTimeout(handleResize, 60);
+      setTimeout(handleResize, 180);
+      setTimeout(handleResize, 350);
     };
 
     window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
+    window.addEventListener('orientationchange', handleOrientationChange);
+    window.visualViewport?.addEventListener('resize', handleResize);
+    if (window.screen?.orientation) {
+      window.screen.orientation.addEventListener('change', handleOrientationChange);
+    }
     handleResize();
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
+      window.removeEventListener('orientationchange', handleOrientationChange);
+      window.visualViewport?.removeEventListener('resize', handleResize);
+      if (window.screen?.orientation) {
+        window.screen.orientation.removeEventListener('change', handleOrientationChange);
+      }
     };
   }, []);
 
@@ -1123,7 +1300,7 @@ export default function App() {
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#070b0e] text-white font-sans select-none">
+    <div className="relative w-screen h-[100dvh] min-h-[100dvh] max-h-[100dvh] overflow-hidden bg-[#070b0e] text-white font-sans select-none">
       {/* TELA DE CARREGAMENTO PROFISSIONAL INICIAL */}
       {isLoading && <LoadingScreen onLoaded={handleLoaded} />}
 
@@ -1179,9 +1356,9 @@ export default function App() {
       )}
 
       {/* ===================================================================== */}
-      {/* HUD DE PARTIDA (QUANDO EM CAMPO) */}
+      {/* HUD DE PARTIDA (QUANDO EM CAMPO COM PARTIDA ATIVA) */}
       {/* ===================================================================== */}
-      {!isGameMenuOpen && !isLoading && (
+      {!isGameMenuOpen && !isLoading && isMatchActive && (
         <>
           {/* PLACAR NO TOPO CENTRAL */}
           <div className="fixed top-3 left-1/2 -translate-x-1/2 z-30 pointer-events-auto flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-[#0a0e14]/90 border border-zinc-800 backdrop-blur-md shadow-2xl">
@@ -1244,6 +1421,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
+                finalizeMatchRanking(scoreYellow, scoreBlue);
+                setIsMatchActive(false);
+                engineRef.current.botActive = false;
+                engineRef.current.resetMatch();
                 if (onlineSession) {
                   handleLeaveRoom();
                 } else {
@@ -1252,49 +1433,66 @@ export default function App() {
               }}
               className="px-3 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white text-xs font-bold shadow-lg cursor-pointer active:scale-95"
             >
-              Menu
+              Sair de Campo
             </button>
           </div>
 
-          {/* CONTROLES MOBILE VIRTUAIS COM SAFE AREA */}
-          <div
-            className="fixed z-30 pointer-events-auto touch-none select-none transition-all"
-            style={{
-              bottom: `calc(${hudConfig.joystickOffsetY || 24}px + env(safe-area-inset-bottom, 0px))`,
-              [hudConfig.layout === 'inverted' ? 'right' : 'left']: `calc(${
-                hudConfig.joystickOffsetX || 24
-              }px + env(safe-area-inset-left, 0px))`,
-            }}
-          >
-            <SimpleJoystick
-              onMove={handleJoystickMove}
-              keyboardVector={keyboardVector}
-              size={hudConfig.joystickSize}
-              opacity={hudConfig.opacity}
-              mode={hudConfig.joystickMode}
-              isFixed={hudConfig.joystickMode === 'fixed'}
-              vibrationEnabled={hudConfig.vibration}
-            />
-          </div>
+          {/* CONTROLES MOBILE VIRTUAIS COM POSICIONAMENTO DINÂMICO E RECALIBRADO */}
+          {(() => {
+            const isLandscape = viewport.isLandscape;
+            const isCompact = isLandscape && viewport.height < 520;
+            const joySize = isCompact ? Math.min(hudConfig.joystickSize, 100) : hudConfig.joystickSize;
+            const kickSize = isCompact ? Math.min(hudConfig.kickSize, 72) : hudConfig.kickSize;
 
-          <div
-            className="fixed z-30 pointer-events-auto touch-none select-none transition-all"
-            style={{
-              bottom: `calc(${hudConfig.kickOffsetY || 24}px + env(safe-area-inset-bottom, 0px))`,
-              [hudConfig.layout === 'inverted' ? 'left' : 'right']: `calc(${
-                hudConfig.kickOffsetX || 24
-              }px + env(safe-area-inset-right, 0px))`,
-            }}
-          >
-            <SimpleKickButton
-              onKickChange={handleKickChange}
-              keyboardActive={keyboardKick}
-              size={hudConfig.kickSize}
-              opacity={hudConfig.opacity}
-              color={hudConfig.kickColor}
-              vibrationEnabled={hudConfig.vibration}
-            />
-          </div>
+            const joyMaxX = Math.max(0, viewport.width - joySize - 16);
+            const joyMaxY = Math.max(0, viewport.height - joySize - 16);
+            const kickMaxX = Math.max(0, viewport.width - kickSize - 16);
+            const kickMaxY = Math.max(0, viewport.height - kickSize - 16);
+
+            const safeJoyX = Math.max(8, Math.min(hudConfig.joystickOffsetX ?? 24, joyMaxX));
+            const safeJoyY = Math.max(8, Math.min(hudConfig.joystickOffsetY ?? 24, joyMaxY));
+            const safeKickX = Math.max(8, Math.min(hudConfig.kickOffsetX ?? 24, kickMaxX));
+            const safeKickY = Math.max(8, Math.min(hudConfig.kickOffsetY ?? 24, kickMaxY));
+
+            return (
+              <>
+                <div
+                  className="fixed z-30 pointer-events-auto touch-none select-none transition-all"
+                  style={{
+                    bottom: `max(${safeJoyY}px, env(safe-area-inset-bottom, 12px))`,
+                    [hudConfig.layout === 'inverted' ? 'right' : 'left']: `max(${safeJoyX}px, env(safe-area-inset-left, 12px))`,
+                  }}
+                >
+                  <SimpleJoystick
+                    onMove={handleJoystickMove}
+                    keyboardVector={keyboardVector}
+                    size={joySize}
+                    opacity={hudConfig.opacity}
+                    mode={hudConfig.joystickMode}
+                    isFixed={hudConfig.joystickMode === 'fixed'}
+                    vibrationEnabled={hudConfig.vibration}
+                  />
+                </div>
+
+                <div
+                  className="fixed z-30 pointer-events-auto touch-none select-none transition-all"
+                  style={{
+                    bottom: `max(${safeKickY}px, env(safe-area-inset-bottom, 12px))`,
+                    [hudConfig.layout === 'inverted' ? 'left' : 'right']: `max(${safeKickX}px, env(safe-area-inset-right, 12px))`,
+                  }}
+                >
+                  <SimpleKickButton
+                    onKickChange={handleKickChange}
+                    keyboardActive={keyboardKick}
+                    size={kickSize}
+                    opacity={hudConfig.opacity}
+                    color={hudConfig.kickColor}
+                    vibrationEnabled={hudConfig.vibration}
+                  />
+                </div>
+              </>
+            );
+          })()}
         </>
       )}
 
@@ -1525,9 +1723,9 @@ export default function App() {
           setIsRoomsModalOpen(false);
           handleJoinRoom(room, preferredTeam);
         }}
-        onCreateRoom={(name, newTeamSize, newMapSize, limit, time, ownerTeam) => {
+        onCreateRoom={(name, newMapSize, newTeamSize, limit, time, ownerTeam, roomId) => {
           setIsRoomsModalOpen(false);
-          handleCreateRoom(name, newTeamSize, newMapSize, limit, time, ownerTeam);
+          handleCreateRoom(name, newMapSize, newTeamSize, limit, time, ownerTeam, roomId);
         }}
         onToggleOrientation={() => setIsLandscapeForced((prev) => !prev)}
         isLandscapeForced={isLandscapeForced}
@@ -1544,6 +1742,29 @@ export default function App() {
             localStorage.setItem('futzin_hud_config', JSON.stringify(cfg));
           } catch {}
         }}
+        onStartCustomizingHud={() => setIsHudCustomizing(true)}
+      />
+
+      {/* OVERLAY DE CUSTOMIZAÇÃO LIVRE DO HUD NO CAMPO (ARRASTAR & REDIMENSIONAR) */}
+      <HudCustomizerOverlay
+        isActive={isHudCustomizing}
+        config={hudConfig}
+        onChange={(cfg) => setHudConfig(cfg)}
+        onSave={() => {
+          try {
+            localStorage.setItem('futzin_hud_config', JSON.stringify(hudConfig));
+          } catch {}
+          setIsHudCustomizing(false);
+          sounds.playWhistle();
+        }}
+        onReset={() => {
+          setHudConfig({ ...DEFAULT_HUD_CONFIG });
+          try {
+            localStorage.setItem('futzin_hud_config', JSON.stringify(DEFAULT_HUD_CONFIG));
+          } catch {}
+        }}
+        viewportWidth={viewport.width}
+        viewportHeight={viewport.height}
       />
     </div>
   );
