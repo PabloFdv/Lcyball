@@ -176,6 +176,8 @@ export const GameMenuModal: React.FC<GameMenuModalProps> = ({
   useEffect(() => {
     if (isOpen && activeTab === 'rooms') {
       fetchRooms();
+      const interval = setInterval(fetchRooms, 3000);
+      return () => clearInterval(interval);
     }
   }, [isOpen, activeTab]);
 

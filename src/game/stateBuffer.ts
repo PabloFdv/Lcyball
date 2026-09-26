@@ -32,11 +32,11 @@ export class ReplayBuffer {
   private replayFrames: ReplayFrame[] = [];
   private playbackIndex = 0;
   private playbackSubFrame = 0;
-  private playbackSpeed = 0.4; // Câmera lenta suave (0.4x)
+  private playbackSpeed = 0.85; // Câmera dinâmica e ágil (0.85x)
   public scoringTeam: 'red' | 'blue' | null = null;
   public onReplayFinished?: () => void;
 
-  constructor(seconds = 5.0, fps = 60) {
+  constructor(seconds = 2.2, fps = 60) {
     this.maxFrames = Math.round(seconds * fps);
   }
 
@@ -139,6 +139,11 @@ export class ReplayBuffer {
     }
 
     return true;
+  }
+
+  public skip(): void {
+    if (!this.isReplaying) return;
+    this.stop();
   }
 
   public stop(): void {

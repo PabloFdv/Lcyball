@@ -220,8 +220,26 @@ export function handleRankedMatchmaking() {
   }
 }
 
+let globalWss: WebSocketServer | null = null;
+
+export function broadcastRoomList() {
+  if (!globalWss) return;
+  const payload = JSON.stringify({
+    type: 'room_list_update',
+    rooms: serializeRooms(),
+  });
+  for (const client of globalWss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {}
+    }
+  }
+}
+
 export function setupGameWebSocketServer(httpServer: HttpServer) {
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  globalWss = wss;
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     let currentRoomId: string | null = null;
@@ -235,6 +253,12 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
       ? rawIp.split('.').slice(0, 2).join('.') + '.*.*'
       : '127.0.*.*';
 
+    // Ao conectar, envia imediatamente a lista atualizada de salas abertas
+    ws.send(JSON.stringify({
+      type: 'room_list_update',
+      rooms: serializeRooms(),
+    }));
+
     ws.on('message', (data: string) => {
       try {
         const msg = JSON.parse(data.toString());
@@ -242,6 +266,15 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
         // Heartbeat Latência RTT
         if (msg.type === 'client_ping') {
           ws.send(JSON.stringify({ type: 'server_pong', clientTime: msg.t, serverTime: Date.now() }));
+          return;
+        }
+
+        // Solicitação manual da lista de salas
+        if (msg.type === 'get_rooms') {
+          ws.send(JSON.stringify({
+            type: 'room_list_update',
+            rooms: serializeRooms(),
+          }));
           return;
         }
 
@@ -297,12 +330,128 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
           return;
         }
 
+        // Criar Sala Diretamente via WebSocket
+        if (msg.type === 'create_room') {
+          const roomId = msg.roomId || `sala-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+          const teamSize = Math.max(1, Math.min(4, Number(msg.teamSize) || 1)) as 1 | 2 | 3 | 4;
+          const mapSize = (['1v1', '2v2', '3v3', '4v4'].includes(msg.mapSize) ? msg.mapSize : `${teamSize}v${teamSize}`) as any;
+
+          const room: Room = {
+            id: roomId,
+            name: msg.name?.trim() || `Sala ${mapSize} Pro`,
+            mapSize,
+            teamSize,
+            maxPlayers: teamSize * 2,
+            goalLimit: Number(msg.goalLimit) || 5,
+            timeLimit: Number(msg.timeLimit) || 5,
+            password: msg.password?.trim() || undefined,
+            region: msg.region || 'BR',
+            hostPing: 18,
+            hostIp: playerIp,
+            balancedPing: 18,
+            pingQuality: 'Excelente (Pareado)',
+            bufferDelayMs: 0,
+            createdAt: Date.now(),
+            isMatchStarted: false,
+            currentKickoffTeam: 'red',
+            kickoffActive: true,
+            kickoffTouchConfirmed: false,
+            players: new Map(),
+          };
+
+          rooms.set(roomId, room);
+          currentRoomId = roomId;
+          playerId = msg.playerId || `p_${Date.now()}_${Math.floor(Math.random() * 100)}`;
+
+          const hostPlayer: RoomPlayer = {
+            id: playerId,
+            name: msg.name || 'Jogador',
+            team: msg.preferredTeam || 'red',
+            slot: 0,
+            isHost: true,
+            isReferee: true,
+            skinId: msg.skinId,
+            number: msg.number,
+            joinedAt: Date.now(),
+            ping: 18,
+            ip: playerIp,
+            lastPingAt: Date.now(),
+            ws,
+          };
+
+          room.players.set(playerId, hostPlayer);
+
+          ws.send(
+            JSON.stringify({
+              type: 'room_joined',
+              roomId: room.id,
+              roomName: room.name,
+              mapSize: room.mapSize,
+              teamSize: room.teamSize,
+              goalLimit: room.goalLimit,
+              timeLimit: room.timeLimit,
+              isMatchStarted: room.isMatchStarted,
+              player: {
+                id: hostPlayer.id,
+                name: hostPlayer.name,
+                team: hostPlayer.team,
+                isHost: true,
+                isReferee: true,
+                ping: 18,
+                ip: playerIp,
+              },
+              balancedPing: 18,
+              hostPing: 18,
+              bufferDelayMs: 0,
+              pingQuality: 'Excelente (Pareado)',
+              players: [
+                {
+                  id: hostPlayer.id,
+                  name: hostPlayer.name,
+                  team: hostPlayer.team,
+                  isHost: true,
+                  isReferee: true,
+                  isReady: true,
+                  ping: 18,
+                },
+              ],
+            })
+          );
+
+          broadcastRoomList();
+          return;
+        }
+
         // Entrar em Sala
         if (msg.type === 'join_room') {
-          const room = rooms.get(msg.roomId);
+          let room = rooms.get(msg.roomId);
           if (!room) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Sala não encontrada' }));
-            return;
+            // Se a sala não existe no servidor (ex: criada pelo host via websocket ou link direto), cria na hora!
+            const teamSize = Math.max(1, Math.min(4, Number(msg.teamSize) || 1)) as 1 | 2 | 3 | 4;
+            const mapSize = msg.mapSize || (teamSize === 4 ? '4v4' : teamSize === 3 ? '3v3' : teamSize === 2 ? '2v2' : '1v1');
+            room = {
+              id: msg.roomId,
+              name: msg.roomName || (msg.name ? `Sala de ${msg.name}` : `Arena ${mapSize} Pro`),
+              mapSize: mapSize as any,
+              teamSize,
+              maxPlayers: teamSize * 2,
+              goalLimit: Number(msg.goalLimit) || 5,
+              timeLimit: Number(msg.timeLimit) || 5,
+              password: msg.password?.trim() || undefined,
+              region: 'BR',
+              hostPing: 18,
+              hostIp: playerIp,
+              balancedPing: 18,
+              pingQuality: 'Excelente (Pareado)',
+              bufferDelayMs: 0,
+              createdAt: Date.now(),
+              isMatchStarted: false,
+              currentKickoffTeam: 'red',
+              kickoffActive: true,
+              kickoffTouchConfirmed: false,
+              players: new Map(),
+            };
+            rooms.set(msg.roomId, room);
           }
 
           if (room.password && room.password !== msg.password) {
@@ -378,6 +527,8 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
               })),
             })
           );
+
+          broadcastRoomList();
 
           broadcastToRoom(
             room,
@@ -860,6 +1011,7 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
           if (room.players.size === 0) {
             rooms.delete(currentRoomId);
           }
+          broadcastRoomList();
         }
       }
     });

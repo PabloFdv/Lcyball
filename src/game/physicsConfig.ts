@@ -87,13 +87,13 @@ export const HAXBALL = {
     mass: 2.2,
     invMass: 1 / 2.2,
     bCoef: 0.50,
-    maxSpeed: 3.75,
-    acceleration: 0.175,
-    kickingAcceleration: 0.11,
-    damping: 0.966,
-    brakeDamping: 0.895,
-    counterBrakeFactor: 2.2,
-    minSpeedThreshold: 0.015,
+    maxSpeed: 3.8,
+    acceleration: 0.185,
+    kickingAcceleration: 0.12,
+    damping: 0.965,
+    brakeDamping: 0.74, // Freio firme e preciso: para na hora ao soltar o analógico (zero deslize)
+    counterBrakeFactor: 4.8, // Resposta instantânea e ágil ao mudar de direção
+    minSpeedThreshold: 0.02,
   },
   ball: {
     radius: 10.0,

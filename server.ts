@@ -6,6 +6,7 @@ import {
   rooms,
   serializeRooms,
   setupGameWebSocketServer,
+  broadcastRoomList,
   Room,
 } from './src/server/gameServer.ts';
 
@@ -70,6 +71,7 @@ app.post('/api/rooms', (req, res) => {
   };
 
   rooms.set(id, newRoom);
+  broadcastRoomList();
   res.status(201).json({ success: true, room: newRoom });
 });
 

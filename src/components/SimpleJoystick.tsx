@@ -53,16 +53,15 @@ export const SimpleJoystick: React.FC<SimpleJoystickProps> = ({
     let kx = 0;
     let ky = 0;
 
-    const deadzone = 2.5;
+    const deadzone = 3.5;
     if (dist > deadzone) {
       const clampedDist = Math.min(dist, radius);
       const angle = Math.atan2(dy, dx);
       kx = Math.cos(angle) * clampedDist;
       ky = Math.sin(angle) * clampedDist;
 
-      // Resposta natural e linear com sensibilidade perfeitamente proporcional ao toque
-      const ratio = Math.min(1.0, (clampedDist - deadzone) / (radius - deadzone));
-      const intensity = Math.pow(ratio, 1.15);
+      // Resposta linear direta e imediata (sem aceleração atrasada)
+      const intensity = Math.min(1.0, (clampedDist - deadzone) / (radius - deadzone));
 
       normX = Math.cos(angle) * intensity;
       normY = Math.sin(angle) * intensity;
