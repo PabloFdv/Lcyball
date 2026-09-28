@@ -53,6 +53,13 @@ function gameServerPlugin(): Plugin {
                 createdAt: Date.now(),
                 isMatchStarted: false,
                 currentKickoffTeam: 'red',
+                kickoffActive: true,
+                kickoffTouchConfirmed: false,
+                kickoffFrozenUntil: Date.now() + 1200,
+                isGoalTransition: false,
+                ball: { x: 0, y: 0, vx: 0, vy: 0, angle: 0, lastUpdate: Date.now() },
+                scoreYellow: 0,
+                scoreBlue: 0,
                 players: new Map(),
               };
 

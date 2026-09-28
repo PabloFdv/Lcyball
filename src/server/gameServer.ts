@@ -39,6 +39,18 @@ export interface Room {
   currentKickoffTeam: 'red' | 'blue';
   kickoffActive?: boolean;
   kickoffTouchConfirmed?: boolean;
+  kickoffFrozenUntil?: number;
+  isGoalTransition?: boolean;
+  ball: {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    angle: number;
+    lastUpdate: number;
+  };
+  scoreYellow: number;
+  scoreBlue: number;
   players: Map<string, RoomPlayer>;
 }
 
@@ -166,6 +178,13 @@ export function handleRankedMatchmaking() {
       createdAt: Date.now(),
       isMatchStarted: true,
       currentKickoffTeam: 'red',
+      kickoffActive: true,
+      kickoffTouchConfirmed: false,
+      kickoffFrozenUntil: Date.now() + 1200,
+      isGoalTransition: false,
+      ball: { x: 0, y: 0, vx: 0, vy: 0, angle: 0, lastUpdate: Date.now() },
+      scoreYellow: 0,
+      scoreBlue: 0,
       players: new Map(),
     };
 
@@ -356,15 +375,21 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
             currentKickoffTeam: 'red',
             kickoffActive: true,
             kickoffTouchConfirmed: false,
+            kickoffFrozenUntil: Date.now() + 1200,
+            isGoalTransition: false,
+            ball: { x: 0, y: 0, vx: 0, vy: 0, angle: 0, lastUpdate: Date.now() },
+            scoreYellow: 0,
+            scoreBlue: 0,
             players: new Map(),
           };
 
           rooms.set(roomId, room);
           currentRoomId = roomId;
-          playerId = msg.playerId || `p_${Date.now()}_${Math.floor(Math.random() * 100)}`;
+          const assignedPlayerId: string = msg.playerId || `p_${Date.now()}_${Math.floor(Math.random() * 100)}`;
+          playerId = assignedPlayerId;
 
           const hostPlayer: RoomPlayer = {
-            id: playerId,
+            id: assignedPlayerId,
             name: msg.name || 'Jogador',
             team: msg.preferredTeam || 'red',
             slot: 0,
@@ -379,7 +404,7 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
             ws,
           };
 
-          room.players.set(playerId, hostPlayer);
+          room.players.set(assignedPlayerId, hostPlayer);
 
           ws.send(
             JSON.stringify({
@@ -449,6 +474,11 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
               currentKickoffTeam: 'red',
               kickoffActive: true,
               kickoffTouchConfirmed: false,
+              kickoffFrozenUntil: Date.now() + 1200,
+              isGoalTransition: false,
+              ball: { x: 0, y: 0, vx: 0, vy: 0, angle: 0, lastUpdate: Date.now() },
+              scoreYellow: 0,
+              scoreBlue: 0,
               players: new Map(),
             };
             rooms.set(msg.roomId, room);
@@ -789,19 +819,45 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
             const sender = room.players.get(playerId);
             const team = sender?.team || 'red';
 
-            let validX = typeof msg.x === 'number' ? msg.x : 0;
-            let validY = typeof msg.y === 'number' ? msg.y : 0;
-            let validVx = typeof msg.vx === 'number' ? msg.vx : 0;
-            let validVy = typeof msg.vy === 'number' ? msg.vy : 0;
+            let validX = typeof msg.x === 'number' && Number.isFinite(msg.x) ? msg.x : 0;
+            let validY = typeof msg.y === 'number' && Number.isFinite(msg.y) ? msg.y : 0;
+            let validVx = typeof msg.vx === 'number' && Number.isFinite(msg.vx) ? msg.vx : 0;
+            let validVy = typeof msg.vy === 'number' && Number.isFinite(msg.vy) ? msg.vy : 0;
             let validIsKicking = Boolean(msg.isKicking);
+            const now = Date.now();
 
-            // REGRA CANÔNICA DETERMINÍSTICA DO PONTAPÉ INICIAL (SERVER-SIDE LOCKDOWN)
-            if (room.isMatchStarted && room.kickoffActive && !room.kickoffTouchConfirmed) {
+            // Limite físico de velocidade para evitar desync de teleporte
+            const speed = Math.hypot(validVx, validVy);
+            if (speed > 4.5) {
+              validVx = (validVx / speed) * 4.5;
+              validVy = (validVy / speed) * 4.5;
+            }
+
+            const mapSize = room.mapSize || '1v1';
+            const hw = mapSize === '4v4' ? 735 : mapSize === '3v3' ? 630 : mapSize === '2v2' ? 525 : 420;
+            const hh = mapSize === '4v4' ? 360 : mapSize === '3v3' ? 310 : mapSize === '2v2' ? 260 : 210;
+            const centerCircleR = mapSize === '4v4' ? 150 : mapSize === '3v3' ? 130 : mapSize === '2v2' ? 110 : 90;
+            const playerRadius = 17;
+
+            // Limites rígidos do campo
+            validX = Math.max(-hw + playerRadius, Math.min(hw - playerRadius, validX));
+            validY = Math.max(-hh + playerRadius, Math.min(hh - playerRadius, validY));
+
+            // FASE 1: FREEZE ESTÁTICO CENTRAL (Anti-Jitter e Sincronização Perfeita de Início)
+            if (room.kickoffFrozenUntil && room.kickoffFrozenUntil > now) {
+              validVx = 0;
+              validVy = 0;
+              validIsKicking = false;
+              if (team === 'red') {
+                validX = Math.min(-hw * 0.22, validX);
+              } else if (team === 'blue') {
+                validX = Math.max(hw * 0.22, validX);
+              }
+            } else if (room.isMatchStarted && room.kickoffActive && !room.kickoffTouchConfirmed) {
+              // FASE 2: PONTAPÉ INICIAL HAXBALL
               const kickoffTeam = room.currentKickoffTeam || 'red';
-              const playerRadius = 15;
-              const centerCircleR = 140;
 
-              if (team !== kickoffTeam) {
+              if (team !== kickoffTeam && team !== 'spec') {
                 // Time adversário não pode chutar nem tocar na bola antes da equipe do kickoff
                 validIsKicking = false;
 
@@ -829,9 +885,9 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
                   validVx = Math.max(0, validVx * nx) * nx;
                   validVy = Math.max(0, validVy * ny) * ny;
                 }
-              } else {
-                // Apenas a equipe do kickoff pode chutar e dar a saída de bola
-                if (validIsKicking) {
+              } else if (team === kickoffTeam) {
+                // Apenas a equipe do kickoff libera a bola após chute ou toque válido
+                if (validIsKicking || Math.hypot(validX, validY) < playerRadius + 12) {
                   room.kickoffActive = false;
                   room.kickoffTouchConfirmed = true;
                   broadcastToRoom(room, {
@@ -860,32 +916,54 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
           }
         }
 
-        // Sincronização de Bola (Pelo Host)
+        // Sincronização de Bola com Validação Central
         if (msg.type === 'sync_ball' && currentRoomId && playerId) {
           const room = rooms.get(currentRoomId);
           if (room) {
             const sender = room.players.get(playerId);
+            const now = Date.now();
+
             if (sender?.isHost) {
-              // Se a bola saiu do centro, confirma liberação do kickoff
-              if (
-                room.kickoffActive &&
-                (Math.abs(msg.x) > 3.0 || Math.abs(msg.y) > 3.0 || Math.hypot(msg.vx, msg.vy) > 0.4)
-              ) {
-                room.kickoffActive = false;
-                room.kickoffTouchConfirmed = true;
+              let bx = typeof msg.x === 'number' && Number.isFinite(msg.x) ? msg.x : 0;
+              let by = typeof msg.y === 'number' && Number.isFinite(msg.y) ? msg.y : 0;
+              let bvx = typeof msg.vx === 'number' && Number.isFinite(msg.vx) ? msg.vx : 0;
+              let bvy = typeof msg.vy === 'number' && Number.isFinite(msg.vy) ? msg.vy : 0;
+              let bAngle = typeof msg.angle === 'number' && Number.isFinite(msg.angle) ? msg.angle : 0;
+
+              // Durante o freeze ou transição de gol, a bola fica absolutamente estática no centro (0, 0)
+              if (room.kickoffFrozenUntil && room.kickoffFrozenUntil > now) {
+                bx = 0;
+                by = 0;
+                bvx = 0;
+                bvy = 0;
+                bAngle = 0;
+              } else if (room.kickoffActive) {
+                if (Math.hypot(bx, by) > 2.5 || Math.hypot(bvx, bvy) > 0.35) {
+                  room.kickoffActive = false;
+                  room.kickoffTouchConfirmed = true;
+                }
               }
+
+              // Limite físico de velocidade da bola
+              const bSpeed = Math.hypot(bvx, bvy);
+              if (bSpeed > 8.0) {
+                bvx = (bvx / bSpeed) * 8.0;
+                bvy = (bvy / bSpeed) * 8.0;
+              }
+
+              room.ball = { x: bx, y: by, vx: bvx, vy: bvy, angle: bAngle, lastUpdate: now };
 
               broadcastToRoom(
                 room,
                 {
                   type: 'peer_ball_sync',
-                  x: msg.x,
-                  y: msg.y,
-                  vx: msg.vx,
-                  vy: msg.vy,
-                  angle: msg.angle,
-                  scoreYellow: msg.scoreYellow,
-                  scoreBlue: msg.scoreBlue,
+                  x: bx,
+                  y: by,
+                  vx: bvx,
+                  vy: bvy,
+                  angle: bAngle,
+                  scoreYellow: room.scoreYellow,
+                  scoreBlue: room.scoreBlue,
                 },
                 playerId
               );
@@ -893,35 +971,60 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
           }
         }
 
-        // Gol Sincronizado
-        // "depois a bola é de quem tomar o gol, aí vai assim"
+        // Gol Sincronizado com Transição Suave e Anti-Jittering
         if (msg.type === 'sync_goal' && currentRoomId) {
           const room = rooms.get(currentRoomId);
-          if (room) {
-            // Quem tomou o gol tem a posse da bola no reinício!
-            const scorerTeam: 'red' | 'blue' = msg.scorerTeam;
+          if (room && !room.isGoalTransition) {
+            room.isGoalTransition = true;
+            const scorerTeam: 'red' | 'blue' = msg.scorerTeam || 'red';
             const nextPossession: 'red' | 'blue' = scorerTeam === 'red' ? 'blue' : 'red';
             room.currentKickoffTeam = nextPossession;
             room.kickoffActive = true;
             room.kickoffTouchConfirmed = false;
+            room.kickoffFrozenUntil = Date.now() + 2500;
+            room.ball = { x: 0, y: 0, vx: 0, vy: 0, angle: 0, lastUpdate: Date.now() };
+
+            if (typeof msg.scoreYellow === 'number') room.scoreYellow = msg.scoreYellow;
+            if (typeof msg.scoreBlue === 'number') room.scoreBlue = msg.scoreBlue;
 
             broadcastToRoom(room, {
               type: 'peer_goal',
               scorerTeam,
               nextKickoffTeam: nextPossession,
-              message: msg.message,
-              scoreYellow: msg.scoreYellow,
-              scoreBlue: msg.scoreBlue,
+              message: msg.message || 'GOOOOL!',
+              scoreYellow: room.scoreYellow,
+              scoreBlue: room.scoreBlue,
+              freezeDurationMs: 2500,
             });
+
+            // Após o tempo de comemoração/replay curto, posiciona no centro estático
+            const savedRoomId = currentRoomId;
+            setTimeout(() => {
+              if (savedRoomId && rooms.has(savedRoomId)) {
+                room.isGoalTransition = false;
+                room.kickoffFrozenUntil = Date.now() + 1000;
+                room.ball = { x: 0, y: 0, vx: 0, vy: 0, angle: 0, lastUpdate: Date.now() };
+                broadcastToRoom(room, {
+                  type: 'peer_reset',
+                  kickoffTeam: room.currentKickoffTeam,
+                  freezeDurationMs: 1000,
+                });
+              }
+            }, 2500);
           }
         }
 
         if (msg.type === 'sync_reset' && currentRoomId) {
           const room = rooms.get(currentRoomId);
           if (room) {
+            room.kickoffActive = true;
+            room.kickoffTouchConfirmed = false;
+            room.kickoffFrozenUntil = Date.now() + 1000;
+            room.ball = { x: 0, y: 0, vx: 0, vy: 0, angle: 0, lastUpdate: Date.now() };
             broadcastToRoom(room, {
               type: 'peer_reset',
               kickoffTeam: room.currentKickoffTeam,
+              freezeDurationMs: 1000,
             });
           }
         }

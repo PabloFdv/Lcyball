@@ -138,6 +138,8 @@ export class ChinaBallEngine {
   public goalMessage = '';
   public goalCooldownTicks = 0;
   public slowMoTicks = 0;
+  public kickoffFrozenTicks = 0;
+  public isGoalFrozen = false;
   public onGoalScored?: (scorerTeam: 'red' | 'blue', message: string, scoreYellow: number, scoreBlue: number) => void;
 
   public isKicking = false;
@@ -446,11 +448,12 @@ export class ChinaBallEngine {
    * REINÍCIO OFICIAL DE PARTIDA (KICKOFF FORMATION BALANCEADO)
    * Começa com o Time Vermelho; depois a bola é de quem tomar o gol!
    */
-  public resetToKickoff(kickoffTeam?: 'red' | 'blue') {
+  public resetToKickoff(kickoffTeam?: 'red' | 'blue', freezeDurationMs = 1000) {
     if (kickoffTeam) {
       this.currentKickoffTeam = kickoffTeam;
     }
     this.kickoffActive = true;
+    this.kickoffFrozenTicks = Math.round((freezeDurationMs / 1000) * 60);
 
     this.ball.x = 0;
     this.ball.y = 0;
@@ -536,6 +539,8 @@ export class ChinaBallEngine {
     this.particles = [];
     this.ballTrail = [];
     this.screenShake = 0;
+    this.isGoalFrozen = false;
+    this.kickoffFrozenTicks = 60; // 1s freeze estático inicial
   }
 
   public resetMatch() {
@@ -544,6 +549,8 @@ export class ChinaBallEngine {
     this.goalMessage = '';
     this.goalCooldownTicks = 0;
     this.slowMoTicks = 0;
+    this.screenShake = 0;
+    this.isGoalFrozen = false;
     this.currentKickoffTeam = 'red'; // Sempre começa com o time vermelho!
     this.resetToKickoff('red');
   }
@@ -1206,6 +1213,38 @@ export class ChinaBallEngine {
     }
     const dtRatio = clamp(effDtSec / referenceDt, 0.2, 2.0);
 
+    // Se o jogo está em pausa de gol (replay/comemoração), zera tremor e interrompe física
+    if (this.isGoalFrozen) {
+      this.screenShake = 0;
+      this.ball.vx = 0;
+      this.ball.vy = 0;
+      for (const p of this.players) {
+        p.vx = 0;
+        p.vy = 0;
+        p.isKicking = false;
+      }
+      this.updateVisualEffects(dtRatio);
+      return;
+    }
+
+    // Freeze suave de pontapé inicial centralizado
+    if (this.kickoffFrozenTicks > 0) {
+      this.kickoffFrozenTicks--;
+      this.screenShake = 0;
+      this.ball.x = 0;
+      this.ball.y = 0;
+      this.ball.vx = 0;
+      this.ball.vy = 0;
+      this.ballAngle = 0;
+      for (const p of this.players) {
+        p.vx = 0;
+        p.vy = 0;
+        p.isKicking = false;
+      }
+      this.updateVisualEffects(dtRatio);
+      return;
+    }
+
     // Comemoração de gol e retenção da bola dentro da rede
     if (this.goalCooldownTicks > 0) {
       this.goalCooldownTicks--;
@@ -1523,7 +1562,8 @@ export class ChinaBallEngine {
     if (this.enableSlowMo) {
       this.slowMoTicks = 24;
     }
-    this.screenShake = 2.0;
+    this.screenShake = 0; // Elimina qualquer tremor/jittering após o gol
+    this.isGoalFrozen = true;
     sounds.playGoal();
 
     if (this.enableEffects) {

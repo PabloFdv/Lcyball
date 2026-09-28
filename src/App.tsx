@@ -223,8 +223,12 @@ export default function App() {
   const currentMatchShotsRef = useRef(0);
   const currentMatchGoalsRef = useRef(0);
 
-  // Disparo do Efeito e Animação de Gol
+  // Disparo do Efeito e Animação de Gol (sem jittering)
   const triggerGoalFX = useCallback((team: 'red' | 'blue', message: string, sy: number, sb: number) => {
+    // Elimina imediatamente qualquer tremor residual da câmera
+    engineRef.current.screenShake = 0;
+    engineRef.current.isGoalFrozen = true;
+
     setGoalBanner({
       active: true,
       team,
@@ -240,7 +244,7 @@ export default function App() {
       currentMatchGoalsRef.current += 1;
     }
 
-    // Inicia Replay de 5 segundos em câmera lenta
+    // Inicia Replay dinâmico e ágil
     const started = replayBufferRef.current.triggerGoalReplay(team);
     if (started) {
       setIsReplaying(true);
@@ -248,23 +252,25 @@ export default function App() {
 
     setTimeout(() => {
       engineRef.current.screenShake = 0;
-    }, 300);
+    }, 150);
 
     setTimeout(() => {
       setGoalBanner(null);
-    }, 2800);
+    }, 2400);
 
     setTimeout(() => {
       setEdgeGlow(null);
-    }, 3500);
+    }, 2800);
   }, []);
 
-  // Callback de fim de replay
+  // Callback de fim de replay: posiciona na marca central estática com delay suave de kickoff
   useEffect(() => {
     replayBufferRef.current.onReplayFinished = () => {
       setIsReplaying(false);
-      engineRef.current.screenShake = 0;
-      engineRef.current.resetToKickoff(engineRef.current.currentKickoffTeam);
+      const engine = engineRef.current;
+      engine.screenShake = 0;
+      engine.isGoalFrozen = false;
+      engine.resetToKickoff(engine.currentKickoffTeam, 1000);
     };
   }, []);
 
@@ -852,7 +858,7 @@ export default function App() {
     } catch {}
   }, [finalizeMatchRanking, scoreYellow, scoreBlue, triggerGoalFX]);
 
-  // Criação de sala pelo dono: conecta na sala e abre o Lobby
+  // Criação de sala pelo dono: registra via WebSocket e abre o Lobby
   const handleCreateRoom = useCallback((
     name: string,
     newMapSize: MapSize,
@@ -868,27 +874,76 @@ export default function App() {
     setGoalLimit(limit);
     setTimeLimit(time);
 
-    const targetRoomId = roomId || `sala-${Date.now()}`;
-    handleJoinRoom({
-      id: targetRoomId,
-      name,
-      mapSize: newMapSize,
-      teamSize: newTeamSize,
-      mode: `${newTeamSize}v${newTeamSize}`,
-      players: 1,
-      maxPlayers: newTeamSize * 2,
-      goalLimit: limit,
-      timeLimit: time,
-      ping: 18,
-      region: 'BR',
-    }, ownerTeam);
-  }, [handleJoinRoom]);
+    const targetRoomId = roomId || `sala-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    setIsGameMenuOpen(false);
+    setIsRoomsModalOpen(false);
+    setIsLobbyModalOpen(true);
+    setOnlineSession({
+      roomId: targetRoomId,
+      roomName: name,
+      isHost: true,
+      isReferee: true,
+      refereeName: profileRef.current.name,
+      isMatchStarted: false,
+      team: ownerTeam,
+      slot: 0,
+      playerCount: 1,
+      hostPing: 18,
+      balancedPing: 18,
+      bufferDelayMs: 0,
+      quality: 'Excelente',
+    });
+    setLobbyPlayers([
+      {
+        id: profileRef.current.name,
+        name: profileRef.current.name,
+        team: ownerTeam,
+        isHost: true,
+        isReferee: true,
+        isReady: true,
+        ping: 18,
+      },
+    ]);
+
+    const socket = ensureWebSocket();
+    const sendCreate = () => {
+      try {
+        socket.send(
+          JSON.stringify({
+            type: 'create_room',
+            roomId: targetRoomId,
+            name,
+            mapSize: newMapSize,
+            teamSize: newTeamSize,
+            goalLimit: limit,
+            timeLimit: time,
+            preferredTeam: ownerTeam,
+            playerId: profileRef.current.name,
+            playerName: profileRef.current.name,
+            skinId: profileRef.current.skinId,
+            number: profileRef.current.number,
+          })
+        );
+      } catch {}
+    };
+
+    if (socket.readyState === WebSocket.OPEN) {
+      sendCreate();
+    } else {
+      socket.addEventListener('open', sendCreate, { once: true });
+    }
+  }, [ensureWebSocket]);
 
   // Ações do Home Hub:
-  // 1. Jogar Rank com Players Verdadeiros
+  // 1. Jogar Rank com Players Verdadeiros (100% Real, sem bots fictícios)
   const handleStartRankedOnline = useCallback(() => {
     setIsRankedSearching(true);
     setRankedQueueTime(0);
+    setRankedQueuePlayers(1);
+    currentMatchIsRankedOnlineRef.current = true;
+    currentMatchIsRankedBotsRef.current = false;
+
     const socket = ensureWebSocket();
 
     const sendJoin = () => {
@@ -900,15 +955,20 @@ export default function App() {
             name: profileRef.current.name,
             skinId: profileRef.current.skinId,
             number: profileRef.current.number,
-            elo: profileRef.current.rankPoints || 0,
+            elo: profileRef.current.rankPoints || 1000,
           })
         );
       } catch {}
     };
 
+    const prevOnMessage = socket.onmessage;
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'ranked_queue_status') {
+          if (typeof data.playersSearching === 'number') setRankedQueuePlayers(data.playersSearching);
+          if (typeof data.waitTimeSec === 'number') setRankedQueueTime(data.waitTimeSec);
+        }
         if (data.type === 'ranked_match_found') {
           setIsRankedSearching(false);
           sounds.playWhistle();
@@ -929,8 +989,12 @@ export default function App() {
             },
             data.assignedTeam || 'red'
           );
+          return;
         }
       } catch {}
+      if (prevOnMessage) {
+        prevOnMessage.call(socket, event);
+      }
     };
 
     if (socket.readyState === WebSocket.OPEN) {
@@ -938,49 +1002,14 @@ export default function App() {
     } else {
       socket.addEventListener('open', sendJoin, { once: true });
     }
-
-    // Matchmaking garantido: se nenhum player entrar na fila em 3.5s, pareia com adversário ranqueado online
-    setTimeout(() => {
-      setIsRankedSearching((searching) => {
-        if (!searching) return false;
-        sounds.playWhistle();
-        const randNum = String(Math.floor(Math.random() * 80) + 2).padStart(2, '0');
-        const opponentName = `Player${randNum}`;
-        setMatchNotice(`Partida Ranqueada Encontrada! Adversário: ${opponentName}`);
-
-        currentMatchIsRankedOnlineRef.current = true;
-        currentMatchIsRankedBotsRef.current = false;
-        setActiveRoomName(`Ranked 1v1 vs ${opponentName}`);
-        setBotMode('medium');
-        setTeamSize(1);
-        setMapSize('1v1');
-        setGoalLimit(3);
-        setTimeLimit(3);
-
-        const engine = engineRef.current;
-        engine.isOnlineRoom = false;
-        engine.botActive = true;
-        engine.botDifficulty = 'medium';
-        engine.setMatchFormat(1, '1v1', false);
-        engine.currentKickoffTeam = 'red';
-        engine.resetMatch();
-
-        setScoreYellow(0);
-        setScoreBlue(0);
-        setMatchSeconds(0);
-        setIsMatchActive(true);
-        setIsGameMenuOpen(false);
-        setIsRoomsModalOpen(false);
-        setIsLobbyModalOpen(false);
-        return false;
-      });
-    }, 3600);
   }, [ensureWebSocket, handleJoinRoom]);
 
   const handleCancelRankedSearch = useCallback(() => {
     setIsRankedSearching(false);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'leave_ranked_queue' }));
+      try {
+        wsRef.current.send(JSON.stringify({ type: 'leave_ranked_queue' }));
+      } catch {}
     }
   }, []);
 
@@ -1340,6 +1369,25 @@ export default function App() {
         </div>
       )}
 
+      {/* CONTROLE VISÍVEL DE PULAR REPLAY */}
+      {isReplaying && (
+        <div className="fixed top-28 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-black/85 border border-amber-500/60 shadow-2xl backdrop-blur-md animate-in fade-in select-none">
+          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+          <span className="text-[11px] font-mono font-bold text-amber-300 uppercase tracking-wider">
+            Replay Dinâmico
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              replayBufferRef.current.skip();
+            }}
+            className="ml-1 px-3 py-1 rounded-full bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-black uppercase tracking-wider transition-all cursor-pointer active:scale-90 shadow"
+          >
+            Pular ❯❯
+          </button>
+        </div>
+      )}
+
       {/* REPLAY BAR */}
       {isReplaying && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-40 px-4 py-1.5 rounded-full bg-black/80 border border-amber-500/60 text-amber-300 text-xs font-bold font-mono flex items-center gap-2 shadow-xl animate-pulse">
@@ -1437,12 +1485,12 @@ export default function App() {
             </button>
           </div>
 
-          {/* CONTROLES MOBILE VIRTUAIS COM POSICIONAMENTO DINÂMICO E RECALIBRADO */}
+          {/* CONTROLES MOBILE VIRTUAIS COM POSICIONAMENTO DINÂMICO 100DVH (ANTI-OCULTAÇÃO) */}
           {(() => {
             const isLandscape = viewport.isLandscape;
             const isCompact = isLandscape && viewport.height < 520;
-            const joySize = isCompact ? Math.min(hudConfig.joystickSize, 100) : hudConfig.joystickSize;
-            const kickSize = isCompact ? Math.min(hudConfig.kickSize, 72) : hudConfig.kickSize;
+            const joySize = isCompact ? Math.min(hudConfig.joystickSize, 96) : hudConfig.joystickSize;
+            const kickSize = isCompact ? Math.min(hudConfig.kickSize, 70) : hudConfig.kickSize;
 
             const joyMaxX = Math.max(0, viewport.width - joySize - 16);
             const joyMaxY = Math.max(0, viewport.height - joySize - 16);
@@ -1455,9 +1503,12 @@ export default function App() {
             const safeKickY = Math.max(8, Math.min(hudConfig.kickOffsetY ?? 24, kickMaxY));
 
             return (
-              <>
+              <div
+                className="fixed inset-0 z-30 pointer-events-none overflow-hidden select-none"
+                style={{ width: '100vw', height: '100dvh' }}
+              >
                 <div
-                  className="fixed z-30 pointer-events-auto touch-none select-none transition-all"
+                  className="absolute pointer-events-auto touch-none select-none transition-all"
                   style={{
                     bottom: `max(${safeJoyY}px, env(safe-area-inset-bottom, 12px))`,
                     [hudConfig.layout === 'inverted' ? 'right' : 'left']: `max(${safeJoyX}px, env(safe-area-inset-left, 12px))`,
@@ -1475,7 +1526,7 @@ export default function App() {
                 </div>
 
                 <div
-                  className="fixed z-30 pointer-events-auto touch-none select-none transition-all"
+                  className="absolute pointer-events-auto touch-none select-none transition-all"
                   style={{
                     bottom: `max(${safeKickY}px, env(safe-area-inset-bottom, 12px))`,
                     [hudConfig.layout === 'inverted' ? 'left' : 'right']: `max(${safeKickX}px, env(safe-area-inset-right, 12px))`,
@@ -1490,7 +1541,7 @@ export default function App() {
                     vibrationEnabled={hudConfig.vibration}
                   />
                 </div>
-              </>
+              </div>
             );
           })()}
         </>

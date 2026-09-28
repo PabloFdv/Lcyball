@@ -124,7 +124,11 @@ export const HudCustomizerOverlay: React.FC<HudCustomizerOverlayProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 pointer-events-auto select-none bg-black/45 backdrop-blur-[2px] flex flex-col justify-between"
+      className="fixed inset-0 z-50 pointer-events-auto select-none bg-black/60 backdrop-blur-sm flex flex-col justify-between overflow-hidden"
+      style={{
+        width: '100vw',
+        height: '100dvh',
+      }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
     >
@@ -178,7 +182,7 @@ export const HudCustomizerOverlay: React.FC<HudCustomizerOverlayProps> = ({
 
       {/* ELEMENTO 1: ANALÓGICO ARRASTÁVEL */}
       <div
-        className="fixed z-50 touch-none cursor-grab active:cursor-grabbing select-none transition-transform"
+        className="absolute z-50 touch-none cursor-grab active:cursor-grabbing select-none transition-transform"
         style={{
           bottom: `max(${joyOffsetY}px, env(safe-area-inset-bottom, 12px))`,
           [config.layout === 'inverted' ? 'right' : 'left']: `max(${joyOffsetX}px, env(safe-area-inset-left, 12px))`,
@@ -230,7 +234,7 @@ export const HudCustomizerOverlay: React.FC<HudCustomizerOverlayProps> = ({
 
       {/* ELEMENTO 2: BOTÃO DE CHUTE ARRASTÁVEL */}
       <div
-        className="fixed z-50 touch-none cursor-grab active:cursor-grabbing select-none transition-transform"
+        className="absolute z-50 touch-none cursor-grab active:cursor-grabbing select-none transition-transform"
         style={{
           bottom: `max(${kickOffsetY}px, env(safe-area-inset-bottom, 12px))`,
           [config.layout === 'inverted' ? 'left' : 'right']: `max(${kickOffsetX}px, env(safe-area-inset-right, 12px))`,
