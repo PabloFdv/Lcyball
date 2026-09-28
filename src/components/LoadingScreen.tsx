@@ -30,9 +30,6 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({ onLoaded }) => {
     setProgress(100);
     setStepText('Tudo pronto para entrar em campo!');
     setIsFadingOut(true);
-    try {
-      sounds.playWhistle();
-    } catch {}
     setTimeout(() => {
       onLoadedRef.current();
       window.dispatchEvent(new Event('resize'));

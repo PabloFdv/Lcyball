@@ -390,7 +390,7 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
 
           const hostPlayer: RoomPlayer = {
             id: assignedPlayerId,
-            name: msg.name || 'Jogador',
+            name: msg.playerName || msg.name || 'Jogador',
             team: msg.preferredTeam || 'red',
             slot: 0,
             isHost: true,
@@ -506,7 +506,7 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
 
           const player: RoomPlayer = {
             id: playerId!,
-            name: msg.name || 'Jogador',
+            name: msg.playerName || msg.name || 'Jogador',
             team: assignedTeam,
             slot: room.players.size,
             isHost,
@@ -522,6 +522,16 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
 
           room.players.set(playerId!, player);
           recalculateRoomPingBalance(room);
+
+          const serializedPlayers = Array.from(room.players.values()).map((p) => ({
+            id: p.id,
+            name: p.name,
+            team: p.team,
+            isHost: p.isHost,
+            isReferee: p.isReferee,
+            isReady: p.isReady,
+            ping: p.ping,
+          }));
 
           ws.send(
             JSON.stringify({
@@ -546,15 +556,7 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
               hostPing: room.hostPing,
               bufferDelayMs: room.bufferDelayMs,
               pingQuality: room.pingQuality,
-              players: Array.from(room.players.values()).map((p) => ({
-                id: p.id,
-                name: p.name,
-                team: p.team,
-                isHost: p.isHost,
-                isReferee: p.isReferee,
-                isReady: p.isReady,
-                ping: p.ping,
-              })),
+              players: serializedPlayers,
             })
           );
 
@@ -572,6 +574,7 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
                 isReferee: player.isReferee,
                 ping: player.ping,
               },
+              players: serializedPlayers,
               balancedPing: room.balancedPing,
               bufferDelayMs: room.bufferDelayMs,
             },
@@ -1035,7 +1038,18 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
           if (room) {
             const wasHost = room.players.get(playerId)?.isHost;
             room.players.delete(playerId);
-            broadcastToRoom(room, { type: 'player_left', playerId });
+
+            const remainingPlayers = Array.from(room.players.values()).map((p) => ({
+              id: p.id,
+              name: p.name,
+              team: p.team,
+              isHost: p.isHost,
+              isReferee: p.isReferee,
+              isReady: p.isReady,
+              ping: p.ping,
+            }));
+
+            broadcastToRoom(room, { type: 'player_left', playerId, players: remainingPlayers });
 
             if (wasHost && room.players.size > 0) {
               const sorted = Array.from(room.players.values()).sort((a, b) => a.joinedAt - b.joinedAt);
@@ -1056,6 +1070,7 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
             if (room.players.size === 0) {
               rooms.delete(currentRoomId);
             }
+            broadcastRoomList();
             currentRoomId = null;
           }
         }
@@ -1091,7 +1106,18 @@ export function setupGameWebSocketServer(httpServer: HttpServer) {
         if (room) {
           const wasHost = room.players.get(playerId)?.isHost;
           room.players.delete(playerId);
-          broadcastToRoom(room, { type: 'player_left', playerId });
+
+          const remainingPlayers = Array.from(room.players.values()).map((p) => ({
+            id: p.id,
+            name: p.name,
+            team: p.team,
+            isHost: p.isHost,
+            isReferee: p.isReferee,
+            isReady: p.isReady,
+            ping: p.ping,
+          }));
+
+          broadcastToRoom(room, { type: 'player_left', playerId, players: remainingPlayers });
 
           if (wasHost && room.players.size > 0) {
             const sorted = Array.from(room.players.values()).sort((a, b) => a.joinedAt - b.joinedAt);

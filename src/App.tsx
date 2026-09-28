@@ -345,9 +345,9 @@ export default function App() {
     currentMatchIsRankedBotsRef.current = false;
   }, [activeRoomName, handleProfileChange, mapSize, matchSeconds]);
 
-  // Checagem periódica de limite de gols e tempo
+  // Checagem periódica de limite de gols e tempo (somente com partida em andamento ativo)
   useEffect(() => {
-    if (isMatchPaused || isGameMenuOpen || isLobbyModalOpen || isReplaying) return;
+    if (!isMatchActive || isMatchPaused || isGameMenuOpen || isLobbyModalOpen || isReplaying) return;
 
     if (scoreYellow >= goalLimit || scoreBlue >= goalLimit) {
       finalizeMatchRanking(scoreYellow, scoreBlue);
@@ -367,7 +367,7 @@ export default function App() {
         setIsMatchPaused(true);
       }, 1500);
     }
-  }, [scoreYellow, scoreBlue, matchSeconds, goalLimit, timeLimit, isMatchPaused, isGameMenuOpen, isLobbyModalOpen, isReplaying, finalizeMatchRanking]);
+  }, [isMatchActive, scoreYellow, scoreBlue, matchSeconds, goalLimit, timeLimit, isMatchPaused, isGameMenuOpen, isLobbyModalOpen, isReplaying, finalizeMatchRanking]);
 
   // Busca contagem de salas abertas
   const refreshRoomsCount = useCallback(async () => {
@@ -467,30 +467,12 @@ export default function App() {
   }, []);
 
   // Iniciar partida a partir do Lobby (Árbitro / Dono)
+  // Iniciar partida a partir do Lobby (Árbitro / Dono)
   const handleStartMatchFromLobby = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'start_online_match' }));
     }
-    setIsLobbyModalOpen(false);
-    setIsGameMenuOpen(false);
-    setIsMatchActive(true);
-    sounds.playWhistle();
-
-    const engine = engineRef.current;
-    const redCount = lobbyPlayers.filter((p) => p.team === 'red').length;
-    const blueCount = lobbyPlayers.filter((p) => p.team === 'blue').length;
-
-    // Se estiver sozinho na sala, ativa bot no time oposto para jogar contra
-    if (redCount === 0 || blueCount === 0) {
-      engine.botActive = true;
-      engine.botDifficulty = 'medium';
-    } else {
-      engine.botActive = false;
-    }
-
-    engine.currentKickoffTeam = 'red';
-    engine.resetMatch();
-  }, [lobbyPlayers]);
+  }, []);
 
   const handleToggleReady = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -514,8 +496,9 @@ export default function App() {
   const handleLeaveRoom = useCallback(() => {
     finalizeMatchRanking(scoreYellow, scoreBlue);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'leave_room' }));
-      wsRef.current.close();
+      try {
+        wsRef.current.send(JSON.stringify({ type: 'leave_room' }));
+      } catch {}
     }
     setOnlineSession(null);
     setIsLobbyModalOpen(false);
@@ -539,16 +522,21 @@ export default function App() {
     if (!text.trim()) return;
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && onlineSessionRef.current) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'chat_message',
-          text: text.trim(),
-        })
-      );
+      try {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'chat_message',
+            text: text.trim(),
+          })
+        );
+      } catch {}
     }
   }, []);
 
-  // Conectar WebSocket genérico
+  // Router de Mensagens WebSocket Centralizado
+  const messageRouterRef = useRef<(data: any) => void>(() => {});
+
+  // Conectar WebSocket genérico persistente
   const ensureWebSocket = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return wsRef.current;
@@ -557,6 +545,24 @@ export default function App() {
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
+
+    socket.onopen = () => {
+      try {
+        socket.send(JSON.stringify({ type: 'get_rooms' }));
+      } catch {}
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        messageRouterRef.current(data);
+      } catch (err) {
+        console.error('WS Parse Error:', err);
+      }
+    };
+
+    socket.onerror = () => {};
+
     return socket;
   }, []);
 
@@ -579,54 +585,38 @@ export default function App() {
     const engine = engineRef.current;
     engine.setMatchFormat(targetTeamSize, targetMapSize, false);
     engine.isOnlineRoom = true;
-    engine.botActive = false;
+    engine.botActive = false; // SALA ONLINE 100% REAL: SEM BOTS
     replayBufferRef.current.clear();
 
-    // Abre imediatamente o Lobby da sala para transição instantânea
     setIsGameMenuOpen(false);
     setIsRoomsModalOpen(false);
     setIsLobbyModalOpen(true);
+    setIsMatchActive(false);
+
     setOnlineSession({
       roomId: room.id,
       roomName: room.name,
-      isHost: true,
-      isReferee: true,
-      refereeName: profileRef.current.name,
+      isHost: false,
+      isReferee: false,
       isMatchStarted: false,
       team: preferredTeam,
-      slot: 0,
-      playerCount: 1,
+      slot: 1,
+      playerCount: room.players || 1,
       hostPing: 18,
       balancedPing: 18,
       bufferDelayMs: 0,
       quality: 'Excelente',
     });
-    setLobbyPlayers([
-      {
-        id: profileRef.current.name,
-        name: profileRef.current.name,
-        team: preferredTeam,
-        isHost: true,
-        isReferee: true,
-        isReady: true,
-        ping: 18,
-      },
-    ]);
 
-    try {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
-      const socket = new WebSocket(wsUrl);
-      wsRef.current = socket;
-
-      socket.onopen = () => {
+    const socket = ensureWebSocket();
+    const sendJoin = () => {
+      try {
         socket.send(
           JSON.stringify({
             type: 'join_room',
             roomId: room.id,
+            playerId: profileRef.current.name,
+            playerName: profileRef.current.name,
             name: profileRef.current.name,
             skinId: profileRef.current.skinId,
             number: profileRef.current.number,
@@ -634,229 +624,15 @@ export default function App() {
             ping: 18,
           })
         );
-      };
+      } catch {}
+    };
 
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          if (data.type === 'server_pong') {
-            const rtt = Math.max(1, Date.now() - data.clientTime);
-            setPing(rtt);
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: 'report_ping', ping: rtt }));
-            }
-          }
-
-          if (data.type === 'room_notice') {
-            setMatchNotice(data.message);
-            setTimeout(() => setMatchNotice(null), 3500);
-          }
-
-          if (data.type === 'ping_balance_sync') {
-            setPing(data.balancedPing || data.hostPing);
-            setBalancedDelayMs(data.bufferDelayMs || 0);
-            setOnlineSession((prev) => (prev ? {
-              ...prev,
-              hostPing: data.hostPing,
-              balancedPing: data.balancedPing,
-              bufferDelayMs: data.bufferDelayMs,
-              quality: data.quality,
-            } : null));
-          }
-
-          if (data.type === 'room_joined') {
-            const sess = {
-              roomId: data.roomId,
-              roomName: data.roomName,
-              isHost: data.player.isHost,
-              isReferee: data.player.isReferee,
-              refereeName: data.player.isReferee ? data.player.name : undefined,
-              isMatchStarted: data.isMatchStarted,
-              team: data.player.team,
-              slot: data.player.slot || 0,
-              playerCount: data.players?.length || 1,
-              hostPing: data.hostPing || 18,
-              balancedPing: data.balancedPing || 18,
-              bufferDelayMs: data.bufferDelayMs || 0,
-              quality: data.pingQuality || 'Excelente',
-            };
-            setOnlineSession(sess);
-            setLobbyPlayers(data.players || []);
-            setIsGameMenuOpen(false);
-
-            if (!data.isMatchStarted) {
-              setIsLobbyModalOpen(true);
-            }
-          }
-
-          if (data.type === 'player_joined') {
-            setOnlineSession((prev) => (prev ? {
-              ...prev,
-              playerCount: prev.playerCount + 1,
-              balancedPing: data.balancedPing || prev.balancedPing,
-              bufferDelayMs: data.bufferDelayMs || prev.bufferDelayMs,
-            } : null));
-
-            setLobbyPlayers((prev) => {
-              const exists = prev.some((p) => p.id === data.player.id);
-              if (exists) return prev;
-              return [...prev, data.player];
-            });
-
-            setMatchNotice(`Jogador real entrou: ${data.player.name}`);
-            setTimeout(() => setMatchNotice(null), 3000);
-          }
-
-          if (data.type === 'player_left') {
-            setOnlineSession((prev) => (prev ? { ...prev, playerCount: Math.max(1, prev.playerCount - 1) } : null));
-            setLobbyPlayers((prev) => prev.filter((p) => p.id !== data.playerId));
-          }
-
-          if (data.type === 'room_cancelled') {
-            setMatchNotice(data.message || 'A sala foi cancelada pelo anfitrião.');
-            setOnlineSession(null);
-            setIsLobbyModalOpen(false);
-            setIsLiveRefereeDrawerOpen(false);
-            setIsGameMenuOpen(true);
-            engine.resetMatch();
-            sounds.playWhistle();
-          }
-
-          if (data.type === 'room_settings_updated') {
-            if (data.mapSize) {
-              setMapSize(data.mapSize);
-              setTeamSize(data.teamSize || 1);
-              engine.setMatchFormat(data.teamSize || 1, data.mapSize, false);
-            }
-            if (data.goalLimit) setGoalLimit(data.goalLimit);
-            if (data.timeLimit) setTimeLimit(data.timeLimit);
-            setMatchNotice(`Configurações da sala atualizadas por ${data.updatedBy}!`);
-          }
-
-          if (data.type === 'referee_status_changed') {
-            if (data.players) setLobbyPlayers(data.players);
-            if (data.targetPlayerId === profileRef.current.name) {
-              setOnlineSession((prev) => (prev ? { ...prev, isReferee: data.isReferee } : null));
-            }
-            setMatchNotice(data.message);
-            sounds.playWhistle();
-          }
-
-          if (data.type === 'ranked_match_found') {
-            setIsRankedSearching(false);
-            sounds.playWhistle();
-            setMatchNotice(`Partida Ranqueada Encontrada! Adversário: ${data.opponentName}`);
-            handleJoinRoom(
-              {
-                id: data.roomId,
-                name: `Ranqueada 1v1`,
-                mapSize: '1v1',
-                teamSize: 1,
-                mode: '1v1',
-                players: 2,
-                maxPlayers: 2,
-                goalLimit: data.goalLimit || 3,
-                timeLimit: data.timeLimit || 3,
-                ping: 18,
-                region: 'BR',
-              },
-              data.assignedTeam
-            );
-            currentMatchIsRankedOnlineRef.current = true;
-            currentMatchIsRankedBotsRef.current = false;
-          }
-
-          if (data.type === 'ranked_queue_status') {
-            setRankedQueuePlayers(data.playersSearching || 1);
-            setRankedQueueTime(data.waitTimeSec || 0);
-          }
-
-          // Partida iniciada pelo árbitro
-          if (data.type === 'match_started_by_referee') {
-            setIsLobbyModalOpen(false);
-            setIsGameMenuOpen(false);
-            setOnlineSession((prev) => (prev ? { ...prev, isMatchStarted: true } : null));
-
-            setLobbyPlayers((currentPlayers) => {
-              const activeCombatants = currentPlayers
-                .filter((p) => p.team === 'red' || p.team === 'blue')
-                .map((p) => ({
-                  id: p.id,
-                  name: p.name,
-                  team: p.team as 'red' | 'blue',
-                  isMe: p.name === profileRef.current.name,
-                }));
-
-              engine.setupRealOnlinePlayers(activeCombatants);
-              engine.currentKickoffTeam = 'red'; // Sempre começa com o time vermelho!
-              engine.resetToKickoff('red');
-              return currentPlayers;
-            });
-
-            setMatchNotice(`Partida iniciada! Posse inicial: Time Vermelho.`);
-            sounds.playWhistle();
-            setTimeout(() => setMatchNotice(null), 3000);
-          }
-
-          // Mensagens de Chat
-          if (data.type === 'chat') {
-            setChatMessages((prev) => [
-              ...prev.slice(-30),
-              {
-                id: data.id || `chat_${Date.now()}`,
-                sender: data.sender,
-                team: data.team,
-                text: data.text,
-                time: data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                timestamp: data.timestamp || Date.now(),
-              },
-            ]);
-          }
-
-          // Sincronização de Jogador Online
-          if (data.type === 'peer_player_sync') {
-            const peer = engine.players.find((p) => p.id === data.playerId);
-            if (peer) {
-              peer.x = data.x;
-              peer.y = data.y;
-              peer.vx = data.vx;
-              peer.vy = data.vy;
-              peer.isKicking = data.isKicking;
-              if (data.isKicking) {
-                engine.executeKick(peer, 0, 0, 1.0);
-              }
-            }
-          }
-
-          // Sincronização de Bola Online
-          if (data.type === 'peer_ball_sync') {
-            engine.ball.x = data.x;
-            engine.ball.y = data.y;
-            engine.ball.vx = data.vx;
-            engine.ball.vy = data.vy;
-            if (data.angle !== undefined) engine.ballAngle = data.angle;
-            if (typeof data.scoreYellow === 'number') setScoreYellow(data.scoreYellow);
-            if (typeof data.scoreBlue === 'number') setScoreBlue(data.scoreBlue);
-          }
-
-          // Gol recebido online: o time que tomou gol recebe a posse no reinício!
-          if (data.type === 'peer_goal') {
-            if (typeof data.scoreYellow === 'number') setScoreYellow(data.scoreYellow);
-            if (typeof data.scoreBlue === 'number') setScoreBlue(data.scoreBlue);
-            if (data.nextKickoffTeam) {
-              engine.currentKickoffTeam = data.nextKickoffTeam;
-            }
-            triggerGoalFX(data.scorerTeam || 'red', data.message || 'GOOOOL!', data.scoreYellow || 0, data.scoreBlue || 0);
-          }
-
-          if (data.type === 'peer_reset') {
-            engine.resetToKickoff(data.kickoffTeam || engine.currentKickoffTeam);
-          }
-        } catch {}
-      };
-    } catch {}
-  }, [finalizeMatchRanking, scoreYellow, scoreBlue, triggerGoalFX]);
+    if (socket.readyState === WebSocket.OPEN) {
+      sendJoin();
+    } else {
+      socket.addEventListener('open', sendJoin, { once: true });
+    }
+  }, [ensureWebSocket, finalizeMatchRanking, scoreYellow, scoreBlue]);
 
   // Criação de sala pelo dono: registra via WebSocket e abre o Lobby
   const handleCreateRoom = useCallback((
@@ -868,6 +644,7 @@ export default function App() {
     ownerTeam: 'red' | 'blue' | 'spec',
     roomId?: string
   ) => {
+    finalizeMatchRanking(scoreYellow, scoreBlue);
     setActiveRoomName(name);
     setTeamSize(newTeamSize);
     setMapSize(newMapSize);
@@ -879,6 +656,14 @@ export default function App() {
     setIsGameMenuOpen(false);
     setIsRoomsModalOpen(false);
     setIsLobbyModalOpen(true);
+    setIsMatchActive(false);
+
+    const engine = engineRef.current;
+    engine.setMatchFormat(newTeamSize, newMapSize, false);
+    engine.isOnlineRoom = true;
+    engine.botActive = false; // SALA ONLINE 100% REAL: SEM BOTS
+    replayBufferRef.current.clear();
+
     setOnlineSession({
       roomId: targetRoomId,
       roomName: name,
@@ -894,6 +679,7 @@ export default function App() {
       bufferDelayMs: 0,
       quality: 'Excelente',
     });
+
     setLobbyPlayers([
       {
         id: profileRef.current.name,
@@ -933,7 +719,7 @@ export default function App() {
     } else {
       socket.addEventListener('open', sendCreate, { once: true });
     }
-  }, [ensureWebSocket]);
+  }, [ensureWebSocket, finalizeMatchRanking, scoreYellow, scoreBlue]);
 
   // Ações do Home Hub:
   // 1. Jogar Rank com Players Verdadeiros (100% Real, sem bots fictícios)
@@ -945,7 +731,6 @@ export default function App() {
     currentMatchIsRankedBotsRef.current = false;
 
     const socket = ensureWebSocket();
-
     const sendJoin = () => {
       try {
         socket.send(
@@ -961,48 +746,12 @@ export default function App() {
       } catch {}
     };
 
-    const prevOnMessage = socket.onmessage;
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'ranked_queue_status') {
-          if (typeof data.playersSearching === 'number') setRankedQueuePlayers(data.playersSearching);
-          if (typeof data.waitTimeSec === 'number') setRankedQueueTime(data.waitTimeSec);
-        }
-        if (data.type === 'ranked_match_found') {
-          setIsRankedSearching(false);
-          sounds.playWhistle();
-          setMatchNotice(`Partida Ranqueada Encontrada! Adversário: ${data.opponentName}`);
-          handleJoinRoom(
-            {
-              id: data.roomId,
-              name: `Ranqueada 1v1`,
-              mapSize: '1v1',
-              teamSize: 1,
-              mode: '1v1',
-              players: 2,
-              maxPlayers: 2,
-              goalLimit: 3,
-              timeLimit: 3,
-              ping: 18,
-              region: 'BR',
-            },
-            data.assignedTeam || 'red'
-          );
-          return;
-        }
-      } catch {}
-      if (prevOnMessage) {
-        prevOnMessage.call(socket, event);
-      }
-    };
-
     if (socket.readyState === WebSocket.OPEN) {
       sendJoin();
     } else {
       socket.addEventListener('open', sendJoin, { once: true });
     }
-  }, [ensureWebSocket, handleJoinRoom]);
+  }, [ensureWebSocket]);
 
   const handleCancelRankedSearch = useCallback(() => {
     setIsRankedSearching(false);
@@ -1012,6 +761,327 @@ export default function App() {
       } catch {}
     }
   }, []);
+
+  // Atualização dinâmica do Router de Mensagens com todo o estado e callbacks mais recentes
+  useEffect(() => {
+    messageRouterRef.current = (data: any) => {
+      const engine = engineRef.current;
+
+      if (data.type === 'room_list_update') {
+        if (Array.isArray(data.rooms)) {
+          setOnlineRoomsCount(data.rooms.length);
+        }
+      }
+
+      if (data.type === 'server_pong') {
+        const rtt = Math.max(1, Date.now() - data.clientTime);
+        setPing(rtt);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          try {
+            wsRef.current.send(JSON.stringify({ type: 'report_ping', ping: rtt }));
+          } catch {}
+        }
+      }
+
+      if (data.type === 'room_notice') {
+        setMatchNotice(data.message);
+        setTimeout(() => setMatchNotice(null), 3500);
+      }
+
+      if (data.type === 'ping_balance_sync') {
+        setPing(data.balancedPing || data.hostPing);
+        setBalancedDelayMs(data.bufferDelayMs || 0);
+        setOnlineSession((prev) => (prev ? {
+          ...prev,
+          hostPing: data.hostPing,
+          balancedPing: data.balancedPing,
+          bufferDelayMs: data.bufferDelayMs,
+          quality: data.quality,
+        } : null));
+      }
+
+      if (data.type === 'room_joined') {
+        const sess = {
+          roomId: data.roomId,
+          roomName: data.roomName,
+          isHost: data.player?.isHost ?? false,
+          isReferee: data.player?.isReferee ?? false,
+          refereeName: data.player?.isReferee ? data.player?.name : undefined,
+          isMatchStarted: data.isMatchStarted ?? false,
+          team: data.player?.team || 'red',
+          slot: data.player?.slot || 0,
+          playerCount: data.players?.length || 1,
+          hostPing: data.hostPing || 18,
+          balancedPing: data.balancedPing || 18,
+          bufferDelayMs: data.bufferDelayMs || 0,
+          quality: data.pingQuality || 'Excelente',
+        };
+        setOnlineSession(sess);
+        setLobbyPlayers(data.players || []);
+        setActiveRoomName(data.roomName);
+        if (data.mapSize) setMapSize(data.mapSize);
+        if (data.teamSize) setTeamSize(data.teamSize);
+        if (data.goalLimit) setGoalLimit(data.goalLimit);
+        if (data.timeLimit) setTimeLimit(data.timeLimit);
+
+        engine.isOnlineRoom = true;
+        engine.botActive = false; // 100% REAL: SEM BOTS
+        engine.setMatchFormat(data.teamSize || 1, data.mapSize || '1v1', false);
+
+        setIsGameMenuOpen(false);
+        setIsRoomsModalOpen(false);
+
+        if (!data.isMatchStarted) {
+          setIsLobbyModalOpen(true);
+          setIsMatchActive(false);
+        } else {
+          setIsLobbyModalOpen(false);
+          setIsMatchActive(true);
+        }
+      }
+
+      if (data.type === 'player_joined') {
+        if (data.players) {
+          setLobbyPlayers(data.players);
+        } else if (data.player) {
+          setLobbyPlayers((prev) => {
+            const exists = prev.some((p) => p.id === data.player.id);
+            return exists ? prev : [...prev, data.player];
+          });
+        }
+
+        setOnlineSession((prev) => (prev ? {
+          ...prev,
+          playerCount: data.players ? data.players.length : prev.playerCount + 1,
+          balancedPing: data.balancedPing || prev.balancedPing,
+          bufferDelayMs: data.bufferDelayMs || prev.bufferDelayMs,
+        } : null));
+
+        setMatchNotice(`Jogador real entrou: ${data.player?.name || 'Jogador'}`);
+        sounds.playKick();
+        setTimeout(() => setMatchNotice(null), 3000);
+      }
+
+      if (data.type === 'player_left') {
+        if (data.players) {
+          setLobbyPlayers(data.players);
+        } else {
+          setLobbyPlayers((prev) => prev.filter((p) => p.id !== data.playerId));
+        }
+        setOnlineSession((prev) => (prev ? {
+          ...prev,
+          playerCount: data.players ? data.players.length : Math.max(1, prev.playerCount - 1),
+        } : null));
+      }
+
+      if (data.type === 'team_switched' || data.type === 'player_team_updated') {
+        setLobbyPlayers((prev) =>
+          prev.map((p) => (p.id === data.playerId ? { ...p, team: data.team } : p))
+        );
+        if (data.playerId === profileRef.current.name) {
+          setOnlineSession((prev) => (prev ? { ...prev, team: data.team } : null));
+          if (data.team !== 'spec') {
+            engine.player.team = data.team;
+          }
+        }
+      }
+
+      if (data.type === 'teams_swapped') {
+        if (data.players) {
+          setLobbyPlayers(data.players);
+        } else {
+          setLobbyPlayers((prev) =>
+            prev.map((p) => ({
+              ...p,
+              team: p.team === 'red' ? 'blue' : p.team === 'blue' ? 'red' : p.team,
+            }))
+          );
+        }
+        setOnlineSession((prev) => {
+          if (!prev) return null;
+          const nextTeam = prev.team === 'red' ? 'blue' : prev.team === 'blue' ? 'red' : prev.team;
+          if (nextTeam !== 'spec') engine.player.team = nextTeam;
+          return { ...prev, team: nextTeam };
+        });
+        if (data.message) setMatchNotice(data.message);
+      }
+
+      if (data.type === 'teams_shuffled') {
+        if (data.players) {
+          setLobbyPlayers(data.players);
+          const me = data.players.find((p: any) => p.name === profileRef.current.name);
+          if (me && me.team !== 'spec') {
+            setOnlineSession((prev) => (prev ? { ...prev, team: me.team } : null));
+            engine.player.team = me.team;
+          }
+        }
+        if (data.message) setMatchNotice(data.message);
+      }
+
+      if (data.type === 'referee_status_changed') {
+        if (data.players) setLobbyPlayers(data.players);
+        if (data.targetPlayerId === profileRef.current.name) {
+          setOnlineSession((prev) => (prev ? { ...prev, isReferee: data.isReferee } : null));
+        }
+        if (data.message) {
+          setMatchNotice(data.message);
+          sounds.playWhistle();
+        }
+      }
+
+      if (data.type === 'host_transferred') {
+        if (data.hostName === profileRef.current.name) {
+          setOnlineSession((prev) => (prev ? { ...prev, isHost: true, isReferee: true } : null));
+        }
+        if (data.message) setMatchNotice(data.message);
+      }
+
+      if (data.type === 'room_settings_updated') {
+        if (data.mapSize) {
+          setMapSize(data.mapSize);
+          setTeamSize(data.teamSize || 1);
+          engine.setMatchFormat(data.teamSize || 1, data.mapSize, false);
+        }
+        if (data.goalLimit) setGoalLimit(data.goalLimit);
+        if (data.timeLimit) setTimeLimit(data.timeLimit);
+        if (data.updatedBy) setMatchNotice(`Configurações da sala atualizadas por ${data.updatedBy}!`);
+      }
+
+      if (data.type === 'room_cancelled') {
+        setMatchNotice(data.message || 'A sala foi cancelada pelo anfitrião.');
+        setOnlineSession(null);
+        setIsLobbyModalOpen(false);
+        setIsLiveRefereeDrawerOpen(false);
+        setIsMatchActive(false);
+        setIsGameMenuOpen(true);
+        engine.botActive = false;
+        engine.isOnlineRoom = false;
+        engine.resetMatch();
+        sounds.playWhistle();
+      }
+
+      // Início Oficial de Partida via Árbitro/Dono (Dispara para todos os clientes em tempo real)
+      if (data.type === 'match_started_by_referee') {
+        setIsLobbyModalOpen(false);
+        setIsGameMenuOpen(false);
+        setIsMatchActive(true);
+        setOnlineSession((prev) => (prev ? { ...prev, isMatchStarted: true } : null));
+
+        engine.isOnlineRoom = true;
+        engine.botActive = false; // 100% REAL: SEM BOTS
+
+        setLobbyPlayers((currentPlayers) => {
+          const activeCombatants = currentPlayers
+            .filter((p) => p.team === 'red' || p.team === 'blue')
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              team: p.team as 'red' | 'blue',
+              isMe: p.name === profileRef.current.name,
+            }));
+
+          engine.setupRealOnlinePlayers(activeCombatants);
+          engine.currentKickoffTeam = 'red'; // Sempre começa com o time vermelho!
+          engine.resetToKickoff('red');
+          return currentPlayers;
+        });
+
+        setMatchNotice('Partida iniciada! Pontapé inicial: Time Vermelho.');
+        sounds.playWhistle();
+        setTimeout(() => setMatchNotice(null), 3000);
+      }
+
+      // Chat da Sala
+      if (data.type === 'chat') {
+        setChatMessages((prev) => [
+          ...prev.slice(-30),
+          {
+            id: data.id || `chat_${Date.now()}`,
+            sender: data.sender,
+            team: data.team,
+            text: data.text,
+            time: data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: data.timestamp || Date.now(),
+          },
+        ]);
+      }
+
+      // Sincronização de Jogador Online
+      if (data.type === 'peer_player_sync') {
+        const peer = engine.players.find((p) => p.id === data.playerId);
+        if (peer) {
+          peer.x = data.x;
+          peer.y = data.y;
+          peer.vx = data.vx;
+          peer.vy = data.vy;
+          peer.isKicking = data.isKicking;
+          if (data.isKicking) {
+            engine.executeKick(peer, 0, 0, 1.0);
+          }
+        }
+      }
+
+      // Sincronização de Bola Online
+      if (data.type === 'peer_ball_sync') {
+        engine.ball.x = data.x;
+        engine.ball.y = data.y;
+        engine.ball.vx = data.vx;
+        engine.ball.vy = data.vy;
+        if (data.angle !== undefined) engine.ballAngle = data.angle;
+        if (typeof data.scoreYellow === 'number') setScoreYellow(data.scoreYellow);
+        if (typeof data.scoreBlue === 'number') setScoreBlue(data.scoreBlue);
+      }
+
+      // Gol com posse no reinício para quem tomou o gol
+      if (data.type === 'peer_goal') {
+        if (typeof data.scoreYellow === 'number') setScoreYellow(data.scoreYellow);
+        if (typeof data.scoreBlue === 'number') setScoreBlue(data.scoreBlue);
+        if (data.nextKickoffTeam) {
+          engine.currentKickoffTeam = data.nextKickoffTeam;
+        }
+        triggerGoalFX(data.scorerTeam || 'red', data.message || 'GOOOOL!', data.scoreYellow || 0, data.scoreBlue || 0);
+      }
+
+      if (data.type === 'peer_reset') {
+        engine.resetToKickoff(data.kickoffTeam || engine.currentKickoffTeam);
+      }
+
+      // Pareamento Ranqueado Real
+      if (data.type === 'ranked_queue_status') {
+        if (typeof data.playersSearching === 'number') setRankedQueuePlayers(data.playersSearching);
+        if (typeof data.waitTimeSec === 'number') setRankedQueueTime(data.waitTimeSec);
+      }
+
+      if (data.type === 'ranked_match_found') {
+        setIsRankedSearching(false);
+        sounds.playWhistle();
+        setMatchNotice(`Partida Ranqueada Encontrada! Adversário: ${data.opponentName}`);
+        currentMatchIsRankedOnlineRef.current = true;
+        currentMatchIsRankedBotsRef.current = false;
+        handleJoinRoom(
+          {
+            id: data.roomId,
+            name: `Ranqueada 1v1`,
+            mapSize: '1v1',
+            teamSize: 1,
+            mode: '1v1',
+            players: 2,
+            maxPlayers: 2,
+            goalLimit: data.goalLimit || 3,
+            timeLimit: data.timeLimit || 3,
+            ping: 18,
+            region: 'BR',
+          },
+          data.assignedTeam || 'red'
+        );
+      }
+    };
+  });
+
+  // Conexão inicial do WebSocket
+  useEffect(() => {
+    ensureWebSocket();
+  }, [ensureWebSocket]);
 
   // 2. Jogar Rank com Bots
   const handleStartRankedBots = useCallback(() => {
@@ -1061,24 +1131,31 @@ export default function App() {
     sounds.playKick();
   }, []);
 
-  // Detecção de link direto com `?room=XYZ` no carregamento
+  // Detecção de link direto com `?room=XYZ` no carregamento (estritamente 1 vez)
+  const hasCheckedUrlRoomRef = useRef(false);
   useEffect(() => {
+    if (hasCheckedUrlRoomRef.current) return;
+    hasCheckedUrlRoomRef.current = true;
     try {
       const params = new URLSearchParams(window.location.search);
       const urlRoomId = params.get('room');
       if (urlRoomId) {
-        handleJoinRoom({
-          id: urlRoomId,
-          name: `Sala ${urlRoomId}`,
-          mapSize: '1v1',
-          mode: '1v1',
-          players: 1,
-          maxPlayers: 2,
-          goalLimit: 5,
-          timeLimit: 5,
-          ping: 18,
-          region: 'BR',
-        }, 'red');
+        window.history.replaceState({}, '', window.location.pathname);
+        handleJoinRoom(
+          {
+            id: urlRoomId,
+            name: `Sala ${urlRoomId}`,
+            mapSize: '1v1',
+            mode: '1v1',
+            players: 1,
+            maxPlayers: 2,
+            goalLimit: 5,
+            timeLimit: 5,
+            ping: 18,
+            region: 'BR',
+          },
+          'blue'
+        );
       }
     } catch {}
   }, [handleJoinRoom]);
@@ -1594,7 +1671,7 @@ export default function App() {
       {onlineSession && (
         <RoomLobbyModal
           isOpen={isLobbyModalOpen}
-          onClose={() => setIsLobbyModalOpen(false)}
+          onClose={handleLeaveRoom}
           roomId={onlineSession.roomId}
           roomName={onlineSession.roomName}
           mapSize={mapSize}

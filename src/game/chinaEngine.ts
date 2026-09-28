@@ -106,7 +106,7 @@ export class ChinaBallEngine {
   public player!: PlayerDisc;
   public bot!: PlayerDisc;
 
-  public botActive = true;
+  public botActive = false;
   public botDifficulty: 'easy' | 'medium' | 'hard' = 'medium';
   public botIsKicking = false;
   public botKickCooldown = 0;
@@ -332,7 +332,9 @@ export class ChinaBallEngine {
 
     this.player = this.players[0];
     this.bot = this.players.find((p) => p.team === 'blue') || this.players[1];
-    this.botActive = true;
+    if (this.isOnlineRoom || this.isSoloMode) {
+      this.botActive = false;
+    }
   }
 
   /**
